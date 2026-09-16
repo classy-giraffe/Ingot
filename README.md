@@ -5,7 +5,7 @@ A minimal, immutable, systemd-first, x86_64 UEFI Linux OS for headless servers a
 **Status:** design/decision phase (wayfinder map). The build follows the to-spec handoff.
 
 - Canonical design reference: [docs/SPECS.md](docs/SPECS.md)
-- Decision map: [classy-giraffe/Ingot#1](https://github.com/classy-giraffe/Ingot/issues/1) (wayfinder)
+- Decision map: [classy-giraffe/Ingot#1](https://github.com/classy-giraffe/Ingot/issues/1) (wayfinder) - repo snapshot: [docs/MAP.md](docs/MAP.md)
 - Domain glossary: [CONTEXT.md](CONTEXT.md)
 - Research findings: [docs/research/](docs/research/)
 - Agent conventions: [docs/agents/](docs/agents/)
