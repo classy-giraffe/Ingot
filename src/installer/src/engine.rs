@@ -84,14 +84,6 @@ fn plan_cfg_encrypted(cfg: &Config) -> bool {
 
 /// The read-only validation + plan.
 pub fn plan(cfg: Config) -> Result<Plan, String> {
-    // Ingot installs UEFI targets only; the firmware mode of the
-    // machine running the install is the target's.
-    if !Path::new("/sys/firmware/efi").exists() {
-        return Err(
-            "UEFI mode is not active on this system; Ingot installs UEFI targets only".into(),
-        );
-    }
-
     let layout = layout::compute(&cfg);
 
     // v1 is unencrypted: the config parser accepts the category, the
@@ -226,6 +218,15 @@ pub fn dry_run(cfg: Config) -> Result<String, String> {
 /// The full run. Returns a human-readable error on failure; the
 /// working directory keeps the log and repart definitions either way.
 pub fn run(cfg: Config, work: &Path) -> Result<(), String> {
+    // Ingot installs UEFI targets only; the firmware mode of the
+    // machine running the install is the target's. Planning and
+    // dry-run never require it - only the run that writes the disk.
+    if !Path::new("/sys/firmware/efi").exists() {
+        return Err(
+            "UEFI mode is not active on this system; Ingot installs UEFI targets only".into(),
+        );
+    }
+
     let plan = plan(cfg)?;
     let log = InstallLog::open(work.join("install.log"))
         .map_err(|e| format!("cannot open install log: {e}"))?;
