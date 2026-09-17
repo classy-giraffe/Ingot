@@ -163,6 +163,21 @@ pub fn compute(cfg: &Config) -> Layout {
     }
 }
 
+/// The mkfs binaries the plan's filesystem choices require: one per
+/// distinct formatted filesystem, sorted. The unformatted free slot
+/// B needs none.
+pub fn mkfs_set(layout: &Layout) -> Vec<String> {
+    let mut v: Vec<String> = layout
+        .partitions
+        .iter()
+        .filter(|p| p.fs != "unformatted")
+        .map(|p| format!("mkfs.{}", p.fs))
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
 /// The installed-version label for slot A (the versioned GPT label).
 fn slot_a_label(version: &Version) -> String {
     format!("ingot_{version}")

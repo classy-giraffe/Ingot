@@ -215,3 +215,56 @@ fn repart_defs_render_baseline_exact() {
     assert_eq!(defs[3].0, "4-var.conf");
     assert_eq!(defs[4].0, "5-home.conf");
 }
+
+#[test]
+fn mkfs_set_covers_only_formatted_partitions() {
+    let layout = compute(&cfg());
+    assert_eq!(
+        mkfs_set(&layout),
+        vec!["mkfs.btrfs", "mkfs.erofs", "mkfs.vfat"]
+    );
+}
+
+#[test]
+fn mkfs_set_follows_configured_filesystems() {
+    let cfg = config::parse(
+        r#"
+schema = 1
+[target]
+disk = "/dev/vda"
+[source]
+base = "dist"
+version = "0.1.0"
+[system]
+hostname = "ingot"
+timezone = "UTC"
+locale = "C.UTF-8"
+keymap = "us"
+[partitions]
+esp = "1G"
+slot_a = "8G"
+slot_b = "8G"
+var = "4G"
+home = "8G"
+[filesystems]
+slot = "erofs"
+var = "ext4"
+home = "ext4"
+[encryption]
+var = "none"
+home = "none"
+[[users]]
+name = "tommy"
+[ssh]
+authorized_keys = []
+[services]
+enabled = []
+"#,
+    )
+    .unwrap();
+    let layout = compute(&cfg);
+    assert_eq!(
+        mkfs_set(&layout),
+        vec!["mkfs.erofs", "mkfs.ext4", "mkfs.vfat"]
+    );
+}

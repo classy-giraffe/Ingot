@@ -226,14 +226,8 @@ pub fn run(cfg: Config, work: &Path) -> Result<(), String> {
     let plan = plan(cfg)?;
 
     // 11.5 phase 1: the required tools must be available before any
-    // byte is written; the mkfs set follows the layout's filesystem
-    // choices.
-    let mkfs: Vec<String> = plan
-        .layout
-        .partitions
-        .iter()
-        .map(|p| format!("mkfs.{}", p.fs))
-        .collect();
+    // byte is written (layout::mkfs_set skips the unformatted slot).
+    let mkfs = layout::mkfs_set(&plan.layout);
     let missing = missing_tools(&std::env::var("PATH").unwrap_or_default(), &mkfs);
     if !missing.is_empty() {
         return Err(format!(
@@ -299,15 +293,14 @@ fn is_mounted(path: &Path) -> bool {
 
 /// The subprocesses the engine drives (11.5 phase 1: availability
 /// checked before the first write). The mkfs binaries are added per
-/// layout in `run`.
-const TOOLS: [&str; 11] = [
+/// layout in `run`; `bootctl` is absent (best-effort at runtime).
+const TOOLS: [&str; 10] = [
     "systemd-repart",
     "dd",
     "losetup",
     "partprobe",
     "qemu-img",
     "blkid",
-    "bootctl",
     "mount",
     "umount",
     "sync",
