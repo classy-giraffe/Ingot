@@ -223,6 +223,13 @@ pub fn run(cfg: Config, work: &Path) -> Result<(), String> {
         );
     }
 
+    // 11.6.1: clearly warn before the destructive operations. In
+    // declarative mode the config is the confirmation (11.6.2), but
+    // the warning is still mandatory.
+    eprintln!(
+        "WARNING: this install will destroy all existing content on {}",
+        &cfg.target_disk
+    );
     let plan = plan(cfg)?;
 
     // 11.5 phase 1: the required tools must be available before any
@@ -247,6 +254,11 @@ pub fn run(cfg: Config, work: &Path) -> Result<(), String> {
             plan.disk_format,
             human(plan.disk_bytes)
         )),
+    )?;
+    log.log_result(
+        "install",
+        "target-warning",
+        Some(plan.cfg.target_disk.clone()),
     )?;
 
     let mut target = DiskTarget::prepare(Path::new(&plan.cfg.target_disk), work)?;
