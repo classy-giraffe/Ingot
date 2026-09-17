@@ -31,8 +31,7 @@ pub fn parse_sections(bytes: &mut [u8]) -> Result<UkiSections, String> {
     if bytes.len() < 0x40 || bytes[0] != b'M' || bytes[1] != b'Z' {
         return Err("not a PE image (missing MZ header)".into());
     }
-    let pe_off =
-        u32::from_le_bytes([bytes[0x3C], bytes[0x3D], bytes[0x3E], bytes[0x3F]]) as usize;
+    let pe_off = u32::from_le_bytes([bytes[0x3C], bytes[0x3D], bytes[0x3E], bytes[0x3F]]) as usize;
     if pe_off + 24 > bytes.len() {
         return Err("PE header out of bounds".into());
     }
@@ -43,13 +42,11 @@ pub fn parse_sections(bytes: &mut [u8]) -> Result<UkiSections, String> {
     if machine != 0x8664 {
         return Err(format!("UKI is not x86_64 (machine type 0x{machine:04x})"));
     }
-    let nsec =
-        u16::from_le_bytes([bytes[pe_off + 6], bytes[pe_off + 7]]) as usize;
+    let nsec = u16::from_le_bytes([bytes[pe_off + 6], bytes[pe_off + 7]]) as usize;
     if nsec == 0 {
         return Err("PE image has no sections".into());
     }
-    let opt_size =
-        u16::from_le_bytes([bytes[pe_off + 20], bytes[pe_off + 21]]) as usize;
+    let opt_size = u16::from_le_bytes([bytes[pe_off + 20], bytes[pe_off + 21]]) as usize;
     let sec_off = pe_off + 24 + opt_size;
     if sec_off + 40 * nsec > bytes.len() {
         return Err("PE section table out of bounds".into());
@@ -116,9 +113,7 @@ pub fn validate_uki(
     }
     let version_id = format!("VERSION_ID=\"{version}\"");
     if !sections.osrel.contains(&version_id) {
-        return Err(format!(
-            "UKI os-release does not carry {version_id}"
-        ));
+        return Err(format!("UKI os-release does not carry {version_id}"));
     }
     Ok(sections)
 }
@@ -133,7 +128,11 @@ fn section_name(raw: &[u8]) -> String {
 
 /// Trims trailing NUL bytes from section data.
 fn strip_trailing_nul(data: &[u8]) -> &[u8] {
-    let end = data.iter().rposition(|&b| b != 0).map(|i| i + 1).unwrap_or(0);
+    let end = data
+        .iter()
+        .rposition(|&b| b != 0)
+        .map(|i| i + 1)
+        .unwrap_or(0);
     &data[..end]
 }
 
@@ -171,7 +170,7 @@ mod tests {
     }
 
     const CMDLINE: &[u8] =
-        b"usr=PARTUUID=0066bfe5-4f71-52dc-9a16-bb10191a1ddc root=PARTUUID=501347aa-775a-5736-8da3-2a9977c820ec";
+        b"usr=PARTUUID=0066bfe5-47f1-52dc-9a16-1bb10191a1dc root=PARTUUID=501347aa-775a-5736-8da3-2a9977c820ec";
     const OSREL: &[u8] = b"NAME=Ingot\nVERSION_ID=\"0.1.0\"\nID=ingot\n";
 
     #[test]
@@ -185,18 +184,14 @@ mod tests {
     #[test]
     fn rejects_non_pe() {
         let mut junk = vec![0u8; 256];
-        assert!(parse_sections(&mut junk)
-            .unwrap_err()
-            .contains("MZ"));
+        assert!(parse_sections(&mut junk).unwrap_err().contains("MZ"));
     }
 
     #[test]
     fn rejects_wrong_machine() {
         let mut img = pe(&[(".cmdline", CMDLINE), (".osrel", OSREL)]);
         img[0x44..0x46].copy_from_slice(&0x0100u16.to_le_bytes()); // i386
-        assert!(parse_sections(&mut img)
-            .unwrap_err()
-            .contains("x86_64"));
+        assert!(parse_sections(&mut img).unwrap_err().contains("x86_64"));
     }
 
     #[test]
@@ -213,7 +208,7 @@ mod tests {
         let s = validate_uki(
             &mut img,
             "0.1.0",
-            "0066bfe5-4f71-52dc-9a16-bb10191a1ddc",
+            "0066bfe5-47f1-52dc-9a16-1bb10191a1dc",
             "501347aa-775a-5736-8da3-2a9977c820ec",
         )
         .unwrap();
@@ -236,7 +231,7 @@ mod tests {
         let err = validate_uki(
             &mut img,
             "0.1.0",
-            "0066bfe5-4f71-52dc-9a16-bb10191a1ddc",
+            "0066bfe5-47f1-52dc-9a16-1bb10191a1dc",
             "deadbeef-dead-beef-dead-beefdeadbeef",
         )
         .unwrap_err();
@@ -249,7 +244,7 @@ mod tests {
         let err = validate_uki(
             &mut img,
             "9.9.9",
-            "0066bfe5-4f71-52dc-9a16-bb10191a1ddc",
+            "0066bfe5-47f1-52dc-9a16-1bb10191a1dc",
             "501347aa-775a-5736-8da3-2a9977c820ec",
         )
         .unwrap_err();

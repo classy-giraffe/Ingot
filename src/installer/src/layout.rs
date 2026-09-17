@@ -23,9 +23,9 @@ pub const FIRST_OFFSET: u64 = MIB;
 
 // Fixed PARTUUIDs (image/repart-baseline). MUST NOT drift from the
 // image build; the UKI hardcodes them.
-pub const ESP_UUID: &str = "f357e520-642b-559b-abc7-9e5969e56911";
-pub const SLOT_A_UUID: &str = "0066bfe5-4f71-52dc-9a16-bb10191a1ddc";
-pub const SLOT_B_UUID: &str = "5016269b-a18e-556b-a225-83941cd1bcaf";
+pub const ESP_UUID: &str = "f357e520-642b-5b9b-abc7-9e5969de5691";
+pub const SLOT_A_UUID: &str = "0066bfe5-47f1-52dc-9a16-1bb10191a1dc";
+pub const SLOT_B_UUID: &str = "59f1269b-a18e-558b-a225-8394c1d1bc0f";
 pub const VAR_UUID: &str = "501347aa-775a-5736-8da3-2a9977c820ec";
 pub const HOME_UUID: &str = "9e772d30-44c4-5784-8be1-0832e3c1c4db";
 
@@ -51,8 +51,9 @@ pub struct PartitionPlan {
     pub gpt_type: &'static str,
     /// Fixed PARTUUID (no dashes stripped; the full canonical form).
     pub part_uuid: &'static str,
-    /// Filesystem the partition is formatted as (`Format=`).
-    pub fs: &'static str,
+    /// Filesystem the partition is formatted as (`Format=`);
+    /// "unformatted" for the free slot B.
+    pub fs: String,
     /// Partition size in bytes.
     pub size: u64,
     /// Byte offset of the partition start within the disk.
@@ -92,21 +93,23 @@ impl Role {
         }
     }
 
-    /// Filesystem for this role given the config's choices.
-    pub fn fs(self, cfg: &Config) -> &'static str {
+    /// Filesystem for this role given the config's choices; the free
+    /// slot B is left unformatted (an update fills it later).
+    pub fn fs(self, cfg: &Config) -> Option<&'static str> {
         match self {
-            Role::Esp => "fat",
-            Role::SlotA | Role::SlotB => match cfg.fs_slot {
+            Role::Esp => Some("vfat"),
+            Role::SlotA => Some(match cfg.fs_slot {
                 config::SlotFs::Eros => "erofs",
-            },
-            Role::Var => match cfg.fs_var {
+            }),
+            Role::SlotB => None,
+            Role::Var => Some(match cfg.fs_var {
                 StateFs::Btrfs => "btrfs",
                 StateFs::Ext4 => "ext4",
-            },
-            Role::Home => match cfg.fs_home {
+            }),
+            Role::Home => Some(match cfg.fs_home {
                 StateFs::Btrfs => "btrfs",
                 StateFs::Ext4 => "ext4",
-            },
+            }),
         }
     }
 
@@ -144,7 +147,7 @@ pub fn compute(cfg: &Config) -> Layout {
             label,
             gpt_type: role.gpt_type(),
             part_uuid: role.part_uuid(),
-            fs: role.fs(cfg),
+            fs: role.fs(cfg).unwrap_or("unformatted").to_string(),
             size,
             offset,
         });
@@ -192,15 +195,20 @@ pub fn repart_defs(layout: &Layout) -> Vec<(String, String)> {
         .iter()
         .map(|p| {
             let name = format!("{}-{}.conf", p.index, p.label);
-            let conf = format!(
-                "[Partition]\nType={gpt}\nUUID={uuid}\nLabel={label}\nFormat={fs}\nSizeMinBytes={size}\nSizeMaxBytes={size}\n",
-                gpt = p.gpt_type,
-                uuid = p.part_uuid,
-                label = p.label,
-                fs = p.fs,
-                size = p.size,
-            );
-            (name, conf)
+        let format_line = if p.fs == "unformatted" {
+            String::new()
+        } else {
+            format!("Format={}\n", p.fs)
+        };
+        let conf = format!(
+            "[Partition]\nType={gpt}\nUUID={uuid}\nLabel={label}{fmt}SizeMinBytes={size}\nSizeMaxBytes={size}\n",
+            gpt = p.gpt_type,
+            uuid = p.part_uuid,
+            label = p.label,
+            fmt = format_line,
+            size = p.size,
+        );
+        (name, conf)
         })
         .collect()
 }
@@ -258,12 +266,20 @@ enabled = []
         let labels: Vec<&str> = layout.partitions.iter().map(|p| p.label.as_str()).collect();
         assert_eq!(labels, vec!["esp", "ingot_0.1.0", "_empty", "var", "home"]);
         assert_eq!(
-            layout.partitions.iter().map(|p| p.gpt_type).collect::<Vec<_>>(),
+            layout
+                .partitions
+                .iter()
+                .map(|p| p.gpt_type)
+                .collect::<Vec<_>>(),
             vec!["esp", "usr", "usr", "var", "home"]
         );
         assert_eq!(
-            layout.partitions.iter().map(|p| p.fs).collect::<Vec<_>>(),
-            vec!["fat", "erofs", "erofs", "btrfs", "btrfs"]
+            layout
+                .partitions
+                .iter()
+                .map(|p| p.fs.as_str())
+                .collect::<Vec<_>>(),
+            vec!["vfat", "erofs", "unformatted", "btrfs", "btrfs"]
         );
     }
 
@@ -277,19 +293,13 @@ enabled = []
             offset += p.size;
         }
         assert_eq!(layout.used_bytes, offset);
-        assert_eq!(
-            sizes,
-            vec![1 << 30, 8 << 30, 8 << 30, 4 << 30, 8 << 30]
-        );
+        assert_eq!(sizes, vec![1 << 30, 8 << 30, 8 << 30, 4 << 30, 8 << 30]);
     }
 
     #[test]
     fn required_disk_is_used_plus_headroom() {
         let layout = compute(&cfg());
-        assert_eq!(
-            layout.required_disk_bytes,
-            layout.used_bytes + MIB
-        );
+        assert_eq!(layout.required_disk_bytes, layout.used_bytes + MIB);
         // exact fit passes, one byte short fails
         assert!(check_disk(&layout, layout.required_disk_bytes).is_ok());
         assert!(check_disk(&layout, layout.required_disk_bytes - 1).is_err());
@@ -344,7 +354,7 @@ enabled = []
         assert!(esp.contains("Type=esp"), "{esp}");
         assert!(esp.contains(&format!("UUID={ESP_UUID}")), "{esp}");
         assert!(esp.contains("Label=esp"), "{esp}");
-        assert!(esp.contains("Format=fat"), "{esp}");
+        assert!(esp.contains("Format=vfat"), "{esp}");
         assert!(esp.contains("SizeMinBytes=1073741824"), "{esp}");
         assert!(esp.contains("SizeMaxBytes=1073741824"), "{esp}");
         let slot_a = &defs[1].1;
@@ -353,6 +363,10 @@ enabled = []
         assert!(slot_a.contains("Format=erofs"), "{slot_a}");
         let slot_b = &defs[2].1;
         assert!(slot_b.contains("Label=_empty"), "{slot_b}");
+        assert!(
+            !slot_b.contains("Format="),
+            "slot B must stay unformatted: {slot_b}"
+        );
         assert_eq!(defs[0].0, "1-esp.conf");
         assert_eq!(defs[1].0, "2-ingot_0.1.0.conf");
         assert_eq!(defs[2].0, "3-_empty.conf");
