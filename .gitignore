@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 # rust build artifacts
 src/target/
+
+# t4 scratch workspace (install verification disks/logs)
+t4/
