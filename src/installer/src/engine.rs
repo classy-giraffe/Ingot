@@ -356,9 +356,27 @@ fn run_phases(
     target.attach_loop()?;
     // Block-device targets need an explicit rescan (loop devices pick
     // up the GPT at attach via -P; partprobe is a no-op for them).
-    let _ = std::process::Command::new("partprobe")
+    // Best-effort: the outcome is logged either way.
+    match std::process::Command::new("partprobe")
         .arg(target.active_device())
-        .output();
+        .output()
+    {
+        Ok(out) if out.status.success() => log.log_result("repart", "partprobe", None)?,
+        Ok(out) => log.log_result(
+            "repart",
+            "partprobe-warn",
+            Some(format!(
+                "partprobe exited {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            )),
+        )?,
+        Err(e) => log.log_result(
+            "repart",
+            "partprobe-skip",
+            Some(format!("partprobe not usable: {e}")),
+        )?,
+    }
 
     // 2. partition devices (slot B is looked up for the record only)
     let parts = partition_devices(plan, target, log, var_mount)?;
