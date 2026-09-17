@@ -92,6 +92,14 @@ fn plan_cfg_encrypted(cfg: &Config) -> bool {
 
 /// The read-only validation + plan.
 pub fn plan(cfg: Config) -> Result<Plan, String> {
+    // Ingot installs UEFI targets only; the firmware mode of the
+    // machine running the install is the target's.
+    if !Path::new("/sys/firmware/efi").exists() {
+        return Err(
+            "UEFI mode is not active on this system; Ingot installs UEFI targets only".into(),
+        );
+    }
+
     let layout = layout::compute(&cfg);
 
     // v1 is unencrypted: the config parser accepts the category, the
