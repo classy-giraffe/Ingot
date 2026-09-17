@@ -6,6 +6,7 @@
 //! Non-interactive: the config is the authorization. `--dry-run`
 //! reports the plan without touching the disk.
 
+mod config;
 mod size;
 mod sshkey;
 mod version;
