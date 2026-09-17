@@ -7,6 +7,7 @@
 //! reports the plan without touching the disk.
 
 mod size;
+mod sshkey;
 mod version;
 
 fn main() -> std::process::ExitCode {
