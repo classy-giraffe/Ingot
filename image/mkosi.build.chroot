@@ -1,0 +1,40 @@
+#!/bin/sh
+# Main image build script (chroot variant: runs inside the image root
+# merged with the build overlay, so the build toolchain installed as
+# build packages (cargo, gcc) is available. / is writable via the
+# volatile build overlay; writes to it are discarded after the script,
+# so build byproducts (source tree, cargo target/) stay out of the image
+# payload.
+#
+# Builds brush (the first Rust component) from the pinned source staged
+# by the prepare script (final phase) at /work/artifacts/brush-source,
+# and installs it into the image via $DESTDIR: mkosi copies $DESTDIR
+# into the image root after the build scripts ("Copying in build tree"),
+# which is the only way build-script output reaches the final payload.
+set -eu
+
+: "${BRUSH_SHA:?BRUSH_SHA must be set (image/mkosi.conf)}"
+[ -d /work/artifacts/brush-source ] \
+    || { echo "build: brush source missing at /work/artifacts/brush-source" >&2; exit 1; }
+
+# Unpack at a fixed path inside the chroot (writable via the volatile
+# overlay). The fixed path keeps the build deterministic: no
+# workspace-specific paths end up in the binary.
+rm -rf /usr/src/brush
+cp -a /work/artifacts/brush-source /usr/src/brush
+
+# The cargo registry (index + crate sources) was primed by the prepare
+# script (build phase, which runs with network) at
+# /work/artifacts/cargo-home with the image's own toolchain. Build
+# offline against it: pinned compose + pinned source + pinned crate
+# versions (Cargo.lock, --locked --offline).
+CARGO_HOME=/work/artifacts/cargo-home
+HOME=/
+export CARGO_HOME HOME
+cargo build --release --locked --offline \
+    --manifest-path /usr/src/brush/Cargo.toml --bin brush
+
+install -D -m 0755 /usr/src/brush/target/release/brush "$DESTDIR/usr/bin/brush"
+# brush is /bin/sh on the runtime root (usr-merged /bin -> usr/bin)
+ln -sf brush "$DESTDIR/usr/bin/sh"
+echo "ingot: brush ${BRUSH_SHA} built and staged to /usr/bin/brush (/bin/sh)" >&2

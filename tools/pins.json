@@ -1,0 +1,16 @@
+{
+  "image_version": "0.1.0",
+  "compose": {
+    "id": "Fedora-Rawhide-20260916.n.0",
+    "base_url": "https://kojipkgs.fedoraproject.org/compose/rawhide/Fedora-Rawhide-20260916.n.0",
+    "tree": "compose/Everything/x86_64/os",
+    "archive_dir": "/home/tommy/ingot/composes"
+  },
+  "rust": {
+    "brush": {
+      "repo": "https://github.com/reubeno/brush",
+      "tag": "brush-v0.4.0",
+      "sha": "a2886cc09c88947a1bdab5900919c673ae29287f"
+    }
+  }
+}

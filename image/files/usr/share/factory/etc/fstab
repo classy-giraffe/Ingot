@@ -1,0 +1,15 @@
+# Ingot factory fstab.
+# Materialized onto /etc by the initramfs (ingot-prepare: factory
+# defaults copied onto /var/lib/etc, which is bound over /etc; never
+# overwriting existing files).
+#
+# /usr is intentionally NOT here: it is the active slot, identified by
+# usr=PARTUUID=... on the UKI's kernel command line (spec 7), and
+# mounted read-only by the initramfs.
+#
+# /var is intentionally NOT here: it is the state partition,
+# identified by root=PARTUUID=... on the UKI's kernel command line,
+# and mounted by the initramfs at boot.
+
+PARTUUID=9e772d30-44c4-5784-8be1-0832e3c1c4db /home btrfs defaults 0 2
+PARTUUID=f357e520-642b-5b9b-abc7-9e5969de5691 /efi vfat umask=0077 0 0
