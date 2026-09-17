@@ -6,8 +6,9 @@ servers and terminal-driven technical workstations: A/B OS payload slots
 systemd-sysupdate, and a Rust userland (brush, nushell, helix, zellij,
 uutils) built from pinned upstream sources.
 
-**Status:** T1 done - first bootable slot (issue #15): build chain,
-harness 10/10, reproducible slot erofs. See RESUME-T1.md for details.
+**Status:** T1 + T2 done - first bootable slot (issue #15) and A/B
+selection with automatic rollback (issue #16). See RESUME-T1.md and
+RESUME-T2.md for details.
 
 - Canonical design reference: [docs/SPECS.md](docs/SPECS.md)
 - Decision map: [classy-giraffe/Ingot#1](https://github.com/classy-giraffe/Ingot/issues/1) (wayfinder) - repo snapshot: [docs/MAP.md](docs/MAP.md)
@@ -15,7 +16,7 @@ harness 10/10, reproducible slot erofs. See RESUME-T1.md for details.
 - Research findings: [docs/research/](docs/research/)
 - Agent conventions: [docs/agents/](docs/agents/)
 
-## Building (T1)
+## Building
 
 The build chain: pinned Fedora Rawhide compose -> mkosi (single main
 image, disk output) -> GPT disk with signed UKI + fallback on the ESP,
@@ -27,33 +28,41 @@ split artifacts.
 # 1. (optional) archive the pinned compose for offline rebuilds:
 tools/archive-compose.sh
 
-# 2. build everything (pin check, mkosi, erofs, deploy):
-tools/build.sh                # network build against the pinned compose
-tools/build.sh --local        # offline build from the archived compose
+# 2. build (pin check, mkosi, erofs, deploy). --version/--slot build a
+# different release into a different A/B slot (T2); per-version
+# artifacts: dist/ingot_<v>.raw, dist/ingot_<v>.slot.raw,
+# dist/ingot_<v>.efi:
+just build                       # pinned release (0.1.0, slot A)
+just build --version 0.2.0 --slot b
 
-# 3. boot + assert (exit code + dist/harness/results.json):
-harness/run.sh
+# 3. boot + assert (exit code + machine-readable results):
+just harness                     # T1 gate, probe mode
+just prod                        # T1 gate, probe-free
+just ab                          # T2: A/B selection, bless, rollback
+just test                        # host-side unit tests (no VM)
 ```
 
-`dist/build-metadata.json` records the build inputs (compose ID, kernel
-version, brush SHA) and the erofs parameters (spec 20.4).
+`dist/build-metadata-<v>.json` records the per-version build inputs
+(compose ID, kernel version, brush SHA) and the erofs parameters (spec
+20.4).
 
 - `tools/` - build orchestration, compose mirroring, pins, snakeoil keys
 - `image/` - mkosi project: the single main image (whole-system disk
   output) with its phase scripts, the 99ingot dracut module and factory
-  defaults (`files/`), and the fixed-UUID repart definitions
-  (`mkosi.repart/`)
-- `harness/` - QEMU/OVMF boot harness with machine-readable assertions
+  defaults (`files/`), and the fixed-UUID repart baselines
+  (`repart-baseline/`)
+- `harness/` - QEMU/OVMF boot harness with machine-readable assertions:
+  the T1 boot gate (probe and prod modes) and the T2 A/B scenario
 - `dist/` - build artifacts (git-ignored)
 
 ### Requirements
 
 Host tools are version-pinned in `harness/pins.json` and checked by
 `tools/build.sh` before any build: mkosi 26, qemu 10.2.1 with KVM,
-OVMF snakeoil firmware. The build runs as root via the passwordless
-`tools/ingot-build` sudo wrapper (`/etc/sudoers.d/ingot`): the mkosi
-sandbox needs root on this workstation (unprivileged user namespaces
-are blocked).
+OVMF snakeoil firmware. The build runs as root via passwordless sudo
+(configured for the build user on this workstation): the mkosi sandbox
+needs root here (unprivileged user namespaces are blocked). The
+harness and its unit tests run unprivileged.
 
 ### Security Boot
 
