@@ -13,11 +13,12 @@
 //!   password `!`, no password auth at first boot) with home
 //!   directories on the /home partition
 //! - SSH authorized keys into each user's home
+//! - a fresh `machine-id` (per install, 11.5 phase 6)
 //! - service enablement via `multi-user.target.wants` symlinks,
 //!   checked against the units the installed release actually ships
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -119,6 +120,7 @@ pub fn run(
         seed_factory(var, slot, log)?;
     }
     identity(cfg, &etc, slot, log)?;
+    seed_machine_id(&etc, log)?;
     accounts(cfg, &etc, home, slot, log)?;
     services(cfg, &etc, slot, log)?;
     Ok(())
@@ -160,6 +162,23 @@ fn identity(cfg: &Config, etc: &Path, slot: &Path, log: &InstallLog) -> Result<(
         "locale-keymap",
         Some(format!("{} / {}", cfg.locale, cfg.keymap)),
     )?;
+    Ok(())
+}
+
+/// Machine identity: 11.5 phase 6 assigns the machine-id to the
+/// installer. A fresh random id per install - a factory-shipped id
+/// would make every install share one machine identity.
+fn seed_machine_id(etc: &Path, log: &InstallLog) -> Result<(), String> {
+    let mut f =
+        fs::File::open("/dev/urandom").map_err(|e| format!("cannot open /dev/urandom: {e}"))?;
+    let mut raw = [0u8; 16];
+    f.read_exact(&mut raw)
+        .map_err(|e| format!("cannot read /dev/urandom: {e}"))?;
+    let id: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    let path = etc.join("machine-id");
+    fs::write(&path, format!("{id}\n"))
+        .map_err(|e| format!("cannot write machine-id {}: {e}", path.display()))?;
+    log.log_result("etcinit", "machine-id", Some(id))?;
     Ok(())
 }
 
@@ -284,4 +303,23 @@ fn services(cfg: &Config, etc: &Path, slot: &Path, log: &InstallLog) -> Result<(
         log.log_result("etcinit", "service-enabled", Some(unit.clone()))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn machine_id_is_32_hex_digits() {
+        let dir = std::env::temp_dir().join("ingot-machineid-test");
+        fs::create_dir_all(dir.join("lib/etc")).unwrap();
+        let log = InstallLog::open(dir.join("install.log")).unwrap();
+        seed_machine_id(&dir.join("lib/etc"), &log).unwrap();
+        let id = fs::read_to_string(dir.join("lib/etc/machine-id")).unwrap();
+        let hex = id.trim_end();
+        assert_eq!(hex.len(), 32);
+        assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(id.ends_with('\n'));
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
