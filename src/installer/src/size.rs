@@ -20,7 +20,12 @@ impl fmt::Display for ByteSize {
 }
 
 /// Suffix multipliers (1024-based).
-const SUFFIXES: [(char, u64); 4] = [('K', 1 << 10), ('M', 1 << 20), ('G', 1 << 30), ('T', 1 << 40)];
+const SUFFIXES: [(char, u64); 4] = [
+    ('K', 1 << 10),
+    ('M', 1 << 20),
+    ('G', 1 << 30),
+    ('T', 1 << 40),
+];
 
 /// One mebibyte.
 pub const MIB: u64 = 1 << 20;
@@ -112,7 +117,9 @@ mod tests {
 
     #[test]
     fn rejects_garbage() {
-        for bad in ["", "  ", "X", "1X", "G", "-1", "1 G", "1e3", "0x10", "+5", "512KB"] {
+        for bad in [
+            "", "  ", "X", "1X", "G", "-1", "1 G", "1e3", "0x10", "+5", "512KB",
+        ] {
             assert!(parse_size(bad).is_err(), "expected {bad:?} to be rejected");
         }
     }

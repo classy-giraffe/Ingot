@@ -103,15 +103,20 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
     match doc.get("schema") {
         None => errs.push("top-level key 'schema' missing (expected 1)".into()),
         Some(toml::Value::Integer(1)) => {}
-        Some(v) => errs.push(format!(
-            "unsupported schema {v} (expected 1)"
-        )),
+        Some(v) => errs.push(format!("unsupported schema {v} (expected 1)")),
     }
 
     // Strict top level: exactly {schema, target, source, system,
     // partitions, filesystems, encryption, users, ssh, services}.
     const CATS: [&str; 9] = [
-        "target", "source", "system", "partitions", "filesystems", "encryption", "users", "ssh",
+        "target",
+        "source",
+        "system",
+        "partitions",
+        "filesystems",
+        "encryption",
+        "users",
+        "ssh",
         "services",
     ];
     for key in doc.keys() {
@@ -144,28 +149,54 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
     let (source_base, version) = match doc.get("source") {
         None => {
             errs.push("category '[source]' missing (required: base, version)".into());
-            (String::new(), Version { major: 0, minor: 0, patch: 0 })
+            (
+                String::new(),
+                Version {
+                    major: 0,
+                    minor: 0,
+                    patch: 0,
+                },
+            )
         }
         Some(v) => match table(v, "source", &mut errs) {
-            None => (String::new(), Version { major: 0, minor: 0, patch: 0 }),
+            None => (
+                String::new(),
+                Version {
+                    major: 0,
+                    minor: 0,
+                    patch: 0,
+                },
+            ),
             Some(t) => {
                 unknown_keys(t, "source", &["base", "version"], &mut errs);
                 let base = str_key(t, "source", "base", &mut errs);
                 let v = match t.get("version") {
                     None => {
                         errs.push("[source] key 'version' missing".into());
-                        Version { major: 0, minor: 0, patch: 0 }
+                        Version {
+                            major: 0,
+                            minor: 0,
+                            patch: 0,
+                        }
                     }
                     Some(toml::Value::String(s)) => match version::parse(s.as_str()) {
                         Ok(v) => v,
                         Err(e) => {
                             errs.push(format!("[source] {e}"));
-                            Version { major: 0, minor: 0, patch: 0 }
+                            Version {
+                                major: 0,
+                                minor: 0,
+                                patch: 0,
+                            }
                         }
                     },
                     Some(v) => {
                         errs.push(format!("[source] key 'version' must be a string ({v})"));
-                        Version { major: 0, minor: 0, patch: 0 }
+                        Version {
+                            major: 0,
+                            minor: 0,
+                            patch: 0,
+                        }
                     }
                 };
                 (base, v)
@@ -177,8 +208,7 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
     let (hostname, timezone, locale, keymap) = match doc.get("system") {
         None => {
             errs.push(
-                "category '[system]' missing (required: hostname, timezone, locale, keymap)"
-                    .into(),
+                "category '[system]' missing (required: hostname, timezone, locale, keymap)".into(),
             );
             (String::new(), String::new(), String::new(), String::new())
         }
@@ -222,10 +252,22 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
             errs.push(
                 "category '[partitions]' missing (required: esp, slot_a, slot_b, var, home)".into(),
             );
-            (ByteSize(0), ByteSize(0), ByteSize(0), ByteSize(0), ByteSize(0))
+            (
+                ByteSize(0),
+                ByteSize(0),
+                ByteSize(0),
+                ByteSize(0),
+                ByteSize(0),
+            )
         }
         Some(v) => match table(v, "partitions", &mut errs) {
-            None => (ByteSize(0), ByteSize(0), ByteSize(0), ByteSize(0), ByteSize(0)),
+            None => (
+                ByteSize(0),
+                ByteSize(0),
+                ByteSize(0),
+                ByteSize(0),
+                ByteSize(0),
+            ),
             Some(t) => {
                 unknown_keys(
                     t,
@@ -247,9 +289,7 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
     // 11.4.7 filesystem choices
     let (fs_slot, fs_var, fs_home) = match doc.get("filesystems") {
         None => {
-            errs.push(
-                "category '[filesystems]' missing (required: slot, var, home)".into(),
-            );
+            errs.push("category '[filesystems]' missing (required: slot, var, home)".into());
             (SlotFs::Eros, StateFs::Btrfs, StateFs::Btrfs)
         }
         Some(v) => match table(v, "filesystems", &mut errs) {
@@ -343,9 +383,7 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
                     None => None,
                     Some(toml::Value::String(s)) => {
                         if !s.starts_with('/') {
-                            errs.push(format!(
-                                "{what} shell '{s}' must be an absolute path"
-                            ));
+                            errs.push(format!("{what} shell '{s}' must be an absolute path"));
                         }
                         Some(s.clone())
                     }
@@ -362,7 +400,9 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
             users
         }
         Some(v) => {
-            errs.push(format!("category '[[users]]' must be an array of tables ({v})"));
+            errs.push(format!(
+                "category '[[users]]' must be an array of tables ({v})"
+            ));
             Vec::new()
         }
     };
@@ -401,7 +441,9 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
                         keys
                     }
                     Some(v) => {
-                        errs.push(format!("[ssh] key 'authorized_keys' must be an array of strings ({v})"));
+                        errs.push(format!(
+                            "[ssh] key 'authorized_keys' must be an array of strings ({v})"
+                        ));
                         Vec::new()
                     }
                 };
@@ -444,7 +486,9 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
                         units
                     }
                     Some(v) => {
-                        errs.push(format!("[services] key 'enabled' must be an array of strings ({v})"));
+                        errs.push(format!(
+                            "[services] key 'enabled' must be an array of strings ({v})"
+                        ));
                         Vec::new()
                     }
                 };
@@ -511,10 +555,9 @@ fn is_user_name(name: &str) -> bool {
 fn is_unit_name(name: &str) -> bool {
     const SUFFIXES: [&str; 5] = [".service", ".socket", ".path", ".timer", ".target"];
     (1..=255).contains(&name.len())
-        && name.bytes().all(|c| {
-            c.is_ascii_alphanumeric()
-                || matches!(c, b'.' | b':' | b'_' | b'@' | b'-')
-        })
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b':' | b'_' | b'@' | b'-'))
         && !name.starts_with('.')
         && SUFFIXES.iter().any(|s| name.ends_with(s))
 }
@@ -555,7 +598,9 @@ fn size_key(t: &toml::Table, cat: &str, key: &str, errs: &mut Vec<String>) -> By
     let s = match v.as_str() {
         Some(s) => s,
         None => {
-            errs.push(format!("[{cat}] key '{key}' must be a string (a size like '8G')"));
+            errs.push(format!(
+                "[{cat}] key '{key}' must be a string (a size like '8G')"
+            ));
             return ByteSize(0);
         }
     };
@@ -574,12 +619,7 @@ fn size_key(t: &toml::Table, cat: &str, key: &str, errs: &mut Vec<String>) -> By
     }
 }
 
-fn state_fs_key(
-    t: &toml::Table,
-    cat: &str,
-    key: &str,
-    errs: &mut Vec<String>,
-) -> StateFs {
+fn state_fs_key(t: &toml::Table, cat: &str, key: &str, errs: &mut Vec<String>) -> StateFs {
     match t.get(key) {
         None => {
             errs.push(format!("[{cat}] key '{key}' missing"));
@@ -735,15 +775,20 @@ enabled = []
             let doc = without(&valid(), cat);
             let errs = parse(&doc).unwrap_err();
             assert!(
-                errs.iter().any(|e| e.contains(&format!("[{cat}]")) && e.contains("missing")),
+                errs.iter()
+                    .any(|e| e.contains(&format!("[{cat}]")) && e.contains("missing")),
                 "expected a missing diagnostic naming [{cat}], got {errs:?}"
             );
         }
         // [[users]] is an array of tables, not a [table]
-        let doc = valid().replace("[[users]]\nname = \"tommy\"\nshell = \"/usr/bin/brush\"\n", "");
+        let doc = valid().replace(
+            "[[users]]\nname = \"tommy\"\nshell = \"/usr/bin/brush\"\n",
+            "",
+        );
         let errs = parse(&doc).unwrap_err();
         assert!(
-            errs.iter().any(|e| e.contains("[[users]]") && e.contains("missing")),
+            errs.iter()
+                .any(|e| e.contains("[[users]]") && e.contains("missing")),
             "expected a missing diagnostic for [[users]], got {errs:?}"
         );
     }
@@ -752,14 +797,20 @@ enabled = []
     fn missing_schema_fails_named() {
         let doc = valid().replacen("schema = 1\n", "", 1);
         let errs = parse(&doc).unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("'schema' missing")), "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.contains("'schema' missing")),
+            "{errs:?}"
+        );
     }
 
     #[test]
     fn unsupported_schema_fails() {
         let doc = valid().replacen("schema = 1", "schema = 2", 1);
         let errs = parse(&doc).unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("unsupported schema")), "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.contains("unsupported schema")),
+            "{errs:?}"
+        );
     }
 
     #[test]
@@ -771,13 +822,15 @@ enabled = []
         );
         let errs = parse(&doc).unwrap_err();
         assert!(
-            errs.iter().any(|e| e.contains("[target] unknown key 'extra'")),
+            errs.iter()
+                .any(|e| e.contains("[target] unknown key 'extra'")),
             "{errs:?}"
         );
         let doc = valid().replacen("schema = 1\n", "schema = 1\nbogus = 1\n", 1);
         let errs = parse(&doc).unwrap_err();
         assert!(
-            errs.iter().any(|e| e.contains("unknown top-level key 'bogus'")),
+            errs.iter()
+                .any(|e| e.contains("unknown top-level key 'bogus'")),
             "{errs:?}"
         );
     }

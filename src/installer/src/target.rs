@@ -1,0 +1,302 @@
+//! Target disk handling.
+//!
+//! The engine never destroys the original target file in place: a
+//! regular-file target (qcow2 or raw) is worked on through a raw
+//! working copy in the working directory, and only a successful run
+//! replaces the original (atomically, via rename in the same
+//! directory). Block-device targets are used directly and are flagged
+//! as having no automatic rollback.
+//!
+//! Mechanics: `qemu-img` for format detection and conversion,
+//! `losetup` for the loop device, sysfs (`/sys/block/<n>/*/partuuid`)
+//! for partition-device lookup, plain `mount(8)` for the ESP and the
+//! state partitions.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// A prepared target: the original path plus the device the engine
+/// operates on.
+#[derive(Debug)]
+pub struct DiskTarget {
+    /// The path the user named in the config.
+    pub original: PathBuf,
+    /// What `repart`/`dd` operate on (the loop device, the working
+    /// raw file, or the block device itself).
+    pub disk: PathBuf,
+    /// The working raw file (file targets only).
+    pub work_file: Option<PathBuf>,
+    /// True when `original` is a regular file: on success the working
+    /// copy is converted back to the original format and renamed over
+    /// it.
+    pub working_copy: bool,
+    /// True when the original is qcow2 (conversion back is needed).
+    pub was_qcow2: bool,
+    /// The loop device (`/dev/loopN`), file targets only.
+    loop_dev: Option<PathBuf>,
+    /// Mount points, in mount order; detached in reverse.
+    mounts: Vec<PathBuf>,
+}
+
+fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
+    let out = Command::new(cmd)
+        .args(args)
+        .output()
+        .map_err(|e| format!("cannot run {cmd} ({}); the installer needs it in PATH", e))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{cmd} {} failed (exit {}): {}",
+            args.join(" "),
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// True when `path` names a block device (has a /sys/block entry).
+fn is_block_device(path: &Path) -> bool {
+    match path.file_name() {
+        Some(name) => Path::new("/sys/block").join(name).is_dir(),
+        None => false,
+    }
+}
+
+impl DiskTarget {
+    /// Detects the target kind and prepares the working file.
+    pub fn prepare(original: &Path, work: &Path) -> Result<Self, String> {
+        fs::create_dir_all(work)
+            .map_err(|e| format!("cannot create working directory {}: {e}", work.display()))?;
+
+        let meta = fs::metadata(original)
+            .map_err(|e| format!("target disk not accessible: {}: {e}", original.display()))?;
+        if is_block_device(original) {
+            // Used directly: no working copy, no automatic rollback.
+            return Ok(DiskTarget {
+                original: original.to_path_buf(),
+                disk: original.to_path_buf(),
+                work_file: None,
+                working_copy: false,
+                was_qcow2: false,
+                loop_dev: None,
+                mounts: Vec::new(),
+            });
+        }
+        if !meta.is_file() {
+            return Err(format!(
+                "target disk {} is neither a file nor a block device",
+                original.display()
+            ));
+        }
+
+        let fmt = qemu_img_format(original)?;
+        let work_file = work.join("target.raw");
+        if fmt == "qcow2" {
+            run(
+                "qemu-img",
+                &[
+                    "convert",
+                    "-f",
+                    "qcow2",
+                    "-O",
+                    "raw",
+                    &original.to_string_lossy(),
+                    &work_file.to_string_lossy(),
+                ],
+            )
+            .map_err(|e| format!("qcow2 -> raw conversion failed: {e}"))?;
+            Ok(DiskTarget {
+                original: original.to_path_buf(),
+                disk: work_file.clone(),
+                work_file: Some(work_file),
+                working_copy: true,
+                was_qcow2: true,
+                loop_dev: None,
+                mounts: Vec::new(),
+            })
+        } else if fmt == "raw" {
+            let _ = fs::remove_file(&work_file);
+            fs::copy(original, &work_file).map_err(|e| format!("cannot copy raw target: {e}"))?;
+            Ok(DiskTarget {
+                original: original.to_path_buf(),
+                disk: work_file.clone(),
+                work_file: Some(work_file),
+                working_copy: true,
+                was_qcow2: false,
+                loop_dev: None,
+                mounts: Vec::new(),
+            })
+        } else {
+            Err(format!(
+                "unsupported target format {fmt:?} (expected qcow2 or raw)"
+            ))
+        }
+    }
+
+    /// Attaches the working file to a free loop device.
+    pub fn attach_loop(&mut self) -> Result<(), String> {
+        let Some(f) = &self.work_file else {
+            return Ok(());
+        };
+        let dev = run("losetup", &["-f", "--show", &f.to_string_lossy()])
+            .map_err(|e| format!("losetup failed: {e}"))?;
+        self.loop_dev = Some(PathBuf::from(&dev));
+        Ok(())
+    }
+
+    /// The sysfs block name of the device under `disk` (`loop3` for
+    /// `/dev/loop3`, the device basename for block devices).
+    fn sysfs_name(&self) -> String {
+        self.disk
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default()
+    }
+
+    /// Finds the partition device whose PARTUUID matches `uuid`,
+    /// polling sysfs for up to `timeout` seconds (the kernel rescans
+    /// the GPT asynchronously after repart).
+    pub fn partition_by_uuid(&self, uuid: &str, timeout_secs: u64) -> Result<PathBuf, String> {
+        let name = self.sysfs_name();
+        let base = format!("/sys/block/{name}");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        loop {
+            let entries = match fs::read_dir(&base) {
+                Ok(e) => e,
+                Err(_) => {
+                    return Err(format!(
+                        "device not in sysfs: {base} (disk {} not attached?)",
+                        self.disk.display()
+                    ));
+                }
+            };
+            for e in entries.flatten() {
+                let n = e.file_name().to_string_lossy().to_string();
+                if !n.starts_with(&format!("{name}p")) {
+                    continue;
+                }
+                let puuid = fs::read_to_string(e.path().join("partuuid")).ok();
+                if puuid.as_deref().map(|s| s.trim() == uuid).unwrap_or(false) {
+                    return Ok(PathBuf::from(format!("/dev/{n}")));
+                }
+            }
+            if std::time::Instant::now() > deadline {
+                return Err(format!(
+                    "partition with PARTUUID {uuid} never appeared under {base}"
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
+
+    /// Mounts `dev` (fstype `fs`) at a fresh directory under `work`.
+    /// `opts` is appended to `-o` (empty for defaults).
+    pub fn mount(
+        &mut self,
+        dev: &Path,
+        fs: &str,
+        work: &Path,
+        opts: &str,
+    ) -> Result<PathBuf, String> {
+        let dir = work.join(format!(
+            "mount-{}",
+            dev.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "dev".into())
+        ));
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let d = dev.to_string_lossy().to_string();
+        let m = dir.to_string_lossy().to_string();
+        if opts.is_empty() {
+            run("mount", &["-t", fs, &d, &m])?;
+        } else {
+            run("mount", &["-t", fs, "-o", opts, &d, &m])?;
+        }
+        self.mounts.push(dir.clone());
+        Ok(dir)
+    }
+
+    /// Unmounts everything (reverse order) and detaches the loop
+    /// device. Best-effort: the first failure is reported, the rest is
+    /// still attempted.
+    pub fn detach_all(&mut self) -> Result<(), String> {
+        let mut first_err: Option<String> = None;
+        for dir in self.mounts.iter().rev() {
+            let d = dir.to_string_lossy().to_string();
+            if let Err(e) = run("umount", &[&d]) {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+        self.mounts.clear();
+        if let Some(loop_dev) = &self.loop_dev {
+            let d = loop_dev.to_string_lossy().to_string();
+            if let Err(e) = run("losetup", &["-d", &d]) {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+        self.loop_dev = None;
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// Finishes a successful run: converts the working file back to
+    /// the original format and renames it over the original (file
+    /// targets only).
+    pub fn commit(&self) -> Result<(), String> {
+        let Some(work_file) = &self.work_file else {
+            return Ok(());
+        };
+        if !self.was_qcow2 {
+            // raw -> raw: plain copy, then atomic rename.
+            let tmp = self.original.with_extension("ingot-install.tmp");
+            fs::copy(work_file, &tmp).map_err(|e| format!("cannot write installed image: {e}"))?;
+            fs::rename(&tmp, &self.original)
+                .map_err(|e| format!("cannot replace {}: {e}", self.original.display()))?;
+            return Ok(());
+        }
+        let tmp = self.original.with_extension("qcow2.tmp");
+        let w = work_file.to_string_lossy().to_string();
+        let t = tmp.to_string_lossy().to_string();
+        let o = self.original.to_string_lossy().to_string();
+        run("qemu-img", &["convert", "-f", "raw", "-O", "qcow2", &w, &t])
+            .map_err(|e| format!("raw -> qcow2 conversion failed: {e}"))?;
+        fs::rename(&tmp, &self.original).map_err(|e| format!("cannot replace {}: {e}", o))?;
+        Ok(())
+    }
+
+    /// Removes the working file (the log and definitions are kept in
+    /// the working directory for post-mortems).
+    pub fn cleanup_work_file(&self) {
+        if let Some(f) = &self.work_file {
+            let _ = fs::remove_file(f);
+        }
+    }
+}
+
+/// Runs `qemu-img info --output json` on a file and returns the
+/// JSON text.
+pub fn qemu_img_info(path: &Path) -> Result<String, String> {
+    run(
+        "qemu-img",
+        &["info", "--output", "json", &path.to_string_lossy()],
+    )
+    .map_err(|e| format!("qemu-img info failed: {e}"))
+}
+
+/// Queries `qemu-img info` for a file's format.
+pub fn qemu_img_format(path: &Path) -> Result<String, String> {
+    let v: serde_json::Value = qemu_img_info(path)?
+        .parse()
+        .map_err(|_| "qemu-img info: bad JSON".to_string())?;
+    v.get("format")
+        .and_then(|x| x.as_str())
+        .map(String::from)
+        .ok_or("qemu-img info: no format".to_string())
+}

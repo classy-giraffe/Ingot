@@ -30,7 +30,9 @@ impl fmt::Display for Version {
 pub fn parse(s: &str) -> Result<Version, String> {
     let parts: Vec<&str> = s.split('.').collect();
     if parts.len() != 3 {
-        return Err(format!("'{s}' is not a version (expected MAJOR.MINOR.PATCH)"));
+        return Err(format!(
+            "'{s}' is not a version (expected MAJOR.MINOR.PATCH)"
+        ));
     }
     let mut nums = [0u64; 3];
     for (i, part) in parts.iter().enumerate() {
@@ -39,7 +41,9 @@ pub fn parse(s: &str) -> Result<Version, String> {
             || (part.len() > 1 && part.starts_with('0'))
             || !part.bytes().all(|b| b.is_ascii_digit())
         {
-            return Err(format!("'{s}' is not a version (expected MAJOR.MINOR.PATCH)"));
+            return Err(format!(
+                "'{s}' is not a version (expected MAJOR.MINOR.PATCH)"
+            ));
         }
         nums[i] = part.parse().unwrap();
     }
@@ -56,13 +60,36 @@ mod tests {
 
     #[test]
     fn parses_semver_triples() {
-        assert_eq!(parse("0.1.0").unwrap(), Version { major: 0, minor: 1, patch: 0 });
-        assert_eq!(parse("10.20.30").unwrap(), Version { major: 10, minor: 20, patch: 30 });
+        assert_eq!(
+            parse("0.1.0").unwrap(),
+            Version {
+                major: 0,
+                minor: 1,
+                patch: 0
+            }
+        );
+        assert_eq!(
+            parse("10.20.30").unwrap(),
+            Version {
+                major: 10,
+                minor: 20,
+                patch: 30
+            }
+        );
     }
 
     #[test]
     fn rejects_non_versions() {
-        for bad in ["", "0.1", "1.2.3.4", "v0.1.0", "0.1.0-rc1", "a.b.c", "01.2.3", "0.1.x"] {
+        for bad in [
+            "",
+            "0.1",
+            "1.2.3.4",
+            "v0.1.0",
+            "0.1.0-rc1",
+            "a.b.c",
+            "01.2.3",
+            "0.1.x",
+        ] {
             assert!(parse(bad).is_err(), "expected {bad:?} to be rejected");
         }
     }

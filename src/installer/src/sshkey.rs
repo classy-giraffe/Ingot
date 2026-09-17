@@ -122,8 +122,7 @@ mod tests {
 
     /// Minimal standard base64 encoder (test helper).
     fn base64_encode_test(v: &[u8]) -> String {
-        const A: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut s = String::new();
         for chunk in v.chunks(3) {
             let b = [
@@ -134,8 +133,16 @@ mod tests {
             let word = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
             s.push(A[((word >> 18) & 0x3F) as usize] as char);
             s.push(A[((word >> 12) & 0x3F) as usize] as char);
-            s.push(if chunk.len() > 1 { A[((word >> 6) & 0x3F) as usize] } else { b'=' } as char);
-            s.push(if chunk.len() > 2 { A[(word & 0x3F) as usize] } else { b'=' } as char);
+            s.push(if chunk.len() > 1 {
+                A[((word >> 6) & 0x3F) as usize]
+            } else {
+                b'='
+            } as char);
+            s.push(if chunk.len() > 2 {
+                A[(word & 0x3F) as usize]
+            } else {
+                b'='
+            } as char);
         }
         s
     }
@@ -164,7 +171,10 @@ mod tests {
             format!("ssh-ed25519 {}", blob("ssh-rsa")),
         ];
         for bad in bad {
-            assert!(validate(bad.as_str()).is_err(), "expected {bad:?} to be rejected");
+            assert!(
+                validate(bad.as_str()).is_err(),
+                "expected {bad:?} to be rejected"
+            );
         }
     }
 
