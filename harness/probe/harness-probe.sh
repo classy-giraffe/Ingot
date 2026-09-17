@@ -157,6 +157,9 @@ EOF
 journal_err=$(journalctl -b -p crit -q --no-pager 2>/dev/null || true)
 
 sh_path=$(readlink -f /bin/sh 2>/dev/null || echo unknown)
+# T3: the update helper is present in the slot and executable
+helper_ok=0
+/usr/bin/ingot-update-helper --help >/dev/null 2>&1 && helper_ok=1
 
 doc=$(printf '{
   "kernel": "%s",
@@ -177,6 +180,7 @@ doc=$(printf '{
   "failed_units": "%s",
   "journal_err": "%s",
   "sh": "%s",
+  "helper_ok": %s,
   "microcode_rev": "%s"
 }' \
     "$(jesc "$kernel")" \
@@ -203,6 +207,7 @@ doc=$(printf '{
     "$(jesc "$failed_units")" \
     "$(jesc "$journal_err")" \
     "$(jesc "$sh_path")" \
+    "$helper_ok" \
     "$(jesc "$microcode_rev")")
 
 printf '%s\n' "$doc" > "$out"

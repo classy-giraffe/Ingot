@@ -6,13 +6,24 @@
 # so build byproducts (source tree, cargo target/) stay out of the image
 # payload.
 #
-# Builds brush (the first Rust component) from the pinned source staged
-# by the prepare script (final phase) at /work/artifacts/brush-source,
-# and installs it into the image via $DESTDIR: mkosi copies $DESTDIR
-# into the image root after the build scripts ("Copying in build tree"),
-# which is the only way build-script output reaches the final payload.
+# Builds the two Rust components from source staged by the prepare
+# script (final phase) at /work/artifacts/: brush (pinned upstream,
+# the first Rust component) and the in-repo workspace's
+# ingot-update-helper, and installs them into the image via $DESTDIR:
+# mkosi copies $DESTDIR into the image root after the build scripts
+# ("Copying in build tree"), which is the only way build-script output
+# reaches the final payload.
 set -eu
 
+# The /usr/bin/pkg-config wrapper shells out to rpm (absent from the
+# slot image); use the platform-specific wrapper, which only execs
+# pkgconf.
+export PKG_CONFIG=/usr/bin/x86_64-redhat-linux-gnu-pkg-config
+# nettle-sys (sequoia-openpgp build dep) would otherwise generate its
+# bindings with bindgen (needs libclang, absent from the slot image);
+# the committed pregenerated bindings (from the pinned nettle3.10-devel
+# headers) are used instead.
+export NETTLE_PREGENERATED_BINDINGS=/usr/src/ingot/update-helper/build/nettle-bindings.rs
 : "${BRUSH_SHA:?BRUSH_SHA must be set (image/mkosi.conf)}"
 [ -d /work/artifacts/brush-source ] \
     || { echo "build: brush source missing at /work/artifacts/brush-source" >&2; exit 1; }
@@ -37,4 +48,17 @@ cargo build --release --locked --offline \
 install -D -m 0755 /usr/src/brush/target/release/brush "$DESTDIR/usr/bin/brush"
 # brush is /bin/sh on the runtime root (usr-merged /bin -> usr/bin)
 ln -sf brush "$DESTDIR/usr/bin/sh"
+
+# --- ingot-update-helper: the in-repo Rust workspace (spec 7.1). The
+# source was staged by the prepare script (final phase) at
+# /work/artifacts/ingot-source; the same primed registry and the same
+# offline discipline apply (Cargo.lock --locked --offline).
+rm -rf /usr/src/ingot
+cp -a /work/artifacts/ingot-source /usr/src/ingot
+rm -rf /usr/src/ingot/target
+cargo build --release --locked --offline \
+    --manifest-path /usr/src/ingot/Cargo.toml --bin ingot-update-helper
+install -D -m 0755 /usr/src/ingot/target/release/ingot-update-helper \
+    "$DESTDIR/usr/bin/ingot-update-helper"
+echo "ingot: ingot-update-helper built and staged to /usr/bin/ingot-update-helper" >&2
 echo "ingot: brush ${BRUSH_SHA} built and staged to /usr/bin/brush (/bin/sh)" >&2
