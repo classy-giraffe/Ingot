@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::boot;
@@ -228,6 +229,23 @@ pub fn run(cfg: Config, work: &Path) -> Result<(), String> {
     }
 
     let plan = plan(cfg)?;
+
+    // 11.5 phase 1: the required tools must be available before any
+    // byte is written; the mkfs set follows the layout's filesystem
+    // choices.
+    let mkfs: Vec<String> = plan
+        .layout
+        .partitions
+        .iter()
+        .map(|p| format!("mkfs.{}", p.fs))
+        .collect();
+    let missing = missing_tools(&std::env::var("PATH").unwrap_or_default(), &mkfs);
+    if !missing.is_empty() {
+        return Err(format!(
+            "required tools not found in PATH: {} (install the packages that provide them and retry)",
+            missing.join(", ")
+        ));
+    }
     let log = InstallLog::open(work.join("install.log"))
         .map_err(|e| format!("cannot open install log: {e}"))?;
     log.log_result(
@@ -282,6 +300,45 @@ fn is_mounted(path: &Path) -> bool {
         }
     }
     false
+}
+
+/// The subprocesses the engine drives (11.5 phase 1: availability
+/// checked before the first write). The mkfs binaries are added per
+/// layout in `run`.
+const TOOLS: [&str; 11] = [
+    "systemd-repart",
+    "dd",
+    "losetup",
+    "partprobe",
+    "qemu-img",
+    "blkid",
+    "bootctl",
+    "mount",
+    "umount",
+    "sync",
+    "df",
+];
+
+/// Names from `TOOLS` plus `extra` with no executable found in
+/// `PATH`. A plain PATH scan: no subprocess, unit-testable.
+fn missing_tools(path_var: &str, extra: &[String]) -> Vec<String> {
+    let mut missing = Vec::new();
+    for name in TOOLS
+        .iter()
+        .copied()
+        .chain(extra.iter().map(String::as_str))
+    {
+        let found = path_var.split(':').any(|dir| {
+            let Ok(meta) = fs::metadata(Path::new(dir).join(name)) else {
+                return false;
+            };
+            meta.is_file() && meta.permissions().mode() & 0o111 != 0
+        });
+        if !found {
+            missing.push(name.to_string());
+        }
+    }
+    missing
 }
 
 fn run_phases(
@@ -398,7 +455,31 @@ fn run_phases(
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    #[test]
+    fn missing_tools_reports_gaps() {
+        let dir = std::env::temp_dir().join("ingot-tools-test");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("systemd-repart"), "#!/bin/sh\n").unwrap();
+        fs::set_permissions(
+            &dir.join("systemd-repart"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let missing = missing_tools(&dir.to_string_lossy(), &["mkfs.erofs".to_string()]);
+        assert!(
+            !missing.contains(&"systemd-repart".to_string()),
+            "present tool reported missing: {missing:?}"
+        );
+        assert!(
+            missing.contains(&"dd".to_string()),
+            "absent tool not reported: {missing:?}"
+        );
+        assert!(
+            missing.contains(&"mkfs.erofs".to_string()),
+            "missing mkfs not reported: {missing:?}"
+        );
+        let _ = fs::remove_dir(&dir);
+    }
     fn sample_cfg() -> Config {
         crate::config::parse(
             r#"
