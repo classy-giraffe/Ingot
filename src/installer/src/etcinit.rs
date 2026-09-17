@@ -264,6 +264,16 @@ pub fn run(
         gid += 1;
     }
 
+    // The account files: shadow must not be world-readable (the
+    // append helper creates files with 0644).
+    for (file, mode) in [("shadow", 0o600u32), ("passwd", 0o644), ("group", 0o644)] {
+        let p = etc.join(file);
+        if p.exists() {
+            fs::set_permissions(&p, fs::Permissions::from_mode(mode))
+                .map_err(|e| format!("cannot set permissions on /var/lib/etc/{file}: {e}"))?;
+        }
+    }
+
     // --- services ---------------------------------------------------------
     let wants = etc.join("systemd/system/multi-user.target.wants");
     for unit in &cfg.services {
