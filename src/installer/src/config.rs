@@ -125,17 +125,56 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
         }
     }
 
+    let target_disk = parse_target(doc, &mut errs);
+    let (source_base, version) = parse_source(doc, &mut errs);
+    let (hostname, timezone, locale, keymap) = parse_system(doc, &mut errs);
+    let (esp, slot_a, slot_b, var, home) = parse_partitions(doc, &mut errs);
+    let (fs_slot, fs_var, fs_home) = parse_filesystems(doc, &mut errs);
+    let (enc_var, enc_home) = parse_encryption(doc, &mut errs);
+    let users = parse_users(doc, &mut errs);
+    let ssh_keys = parse_ssh(doc, &mut errs);
+    let services = parse_services(doc, &mut errs);
+
+    if !errs.is_empty() {
+        return Err(errs);
+    }
+    Ok(Config {
+        target_disk,
+        source_base,
+        version,
+        hostname,
+        timezone,
+        locale,
+        keymap,
+        esp,
+        slot_a,
+        slot_b,
+        var,
+        home,
+        fs_slot,
+        fs_var,
+        fs_home,
+        enc_var,
+        enc_home,
+        users,
+        ssh_keys,
+        services,
+    })
+}
+
+/// 11.4 category parse: target.
+fn parse_target(doc: &toml::Table, errs: &mut Vec<String>) -> String {
     // 11.4.1 target disk
     let target_disk = match doc.get("target") {
         None => {
             errs.push("category '[target]' missing (required: disk)".into());
             String::new()
         }
-        Some(v) => match table(v, "target", &mut errs) {
+        Some(v) => match table(v, "target", errs) {
             None => String::new(),
             Some(t) => {
-                unknown_keys(t, "target", &["disk"], &mut errs);
-                str_key(t, "target", "disk", &mut errs)
+                unknown_keys(t, "target", &["disk"], errs);
+                str_key(t, "target", "disk", errs)
             }
         },
     };
@@ -144,66 +183,46 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
             "[target] disk '{target_disk}' must be an absolute path (block device or image file)"
         ));
     }
-
+    target_disk
+}
+/// 11.4 category parse: source.
+fn parse_source(doc: &toml::Table, errs: &mut Vec<String>) -> (String, Version) {
     // 11.4.2 OS image source
     let (source_base, version) = match doc.get("source") {
         None => {
             errs.push("category '[source]' missing (required: base, version)".into());
-            (
-                String::new(),
-                Version {
-                    major: 0,
-                    minor: 0,
-                    patch: 0,
-                },
-            )
+            (String::new(), Version::default())
         }
-        Some(v) => match table(v, "source", &mut errs) {
-            None => (
-                String::new(),
-                Version {
-                    major: 0,
-                    minor: 0,
-                    patch: 0,
-                },
-            ),
+        Some(v) => match table(v, "source", errs) {
+            None => (String::new(), Version::default()),
             Some(t) => {
-                unknown_keys(t, "source", &["base", "version"], &mut errs);
-                let base = str_key(t, "source", "base", &mut errs);
+                unknown_keys(t, "source", &["base", "version"], errs);
+                let base = str_key(t, "source", "base", errs);
                 let v = match t.get("version") {
                     None => {
                         errs.push("[source] key 'version' missing".into());
-                        Version {
-                            major: 0,
-                            minor: 0,
-                            patch: 0,
-                        }
+                        Version::default()
                     }
                     Some(toml::Value::String(s)) => match version::parse(s.as_str()) {
                         Ok(v) => v,
                         Err(e) => {
                             errs.push(format!("[source] {e}"));
-                            Version {
-                                major: 0,
-                                minor: 0,
-                                patch: 0,
-                            }
+                            Version::default()
                         }
                     },
                     Some(v) => {
                         errs.push(format!("[source] key 'version' must be a string ({v})"));
-                        Version {
-                            major: 0,
-                            minor: 0,
-                            patch: 0,
-                        }
+                        Version::default()
                     }
                 };
                 (base, v)
             }
         },
     };
-
+    (source_base, version)
+}
+/// 11.4 category parse: system.
+fn parse_system(doc: &toml::Table, errs: &mut Vec<String>) -> (String, String, String, String) {
     // 11.4.3-5 system identity
     let (hostname, timezone, locale, keymap) = match doc.get("system") {
         None => {
@@ -212,19 +231,19 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
             );
             (String::new(), String::new(), String::new(), String::new())
         }
-        Some(v) => match table(v, "system", &mut errs) {
+        Some(v) => match table(v, "system", errs) {
             None => (String::new(), String::new(), String::new(), String::new()),
             Some(t) => {
                 unknown_keys(
                     t,
                     "system",
                     &["hostname", "timezone", "locale", "keymap"],
-                    &mut errs,
+                    errs,
                 );
-                let hostname = str_key(t, "system", "hostname", &mut errs);
-                let timezone = str_key(t, "system", "timezone", &mut errs);
-                let locale = str_key(t, "system", "locale", &mut errs);
-                let keymap = str_key(t, "system", "keymap", &mut errs);
+                let hostname = str_key(t, "system", "hostname", errs);
+                let timezone = str_key(t, "system", "timezone", errs);
+                let locale = str_key(t, "system", "locale", errs);
+                let keymap = str_key(t, "system", "keymap", errs);
                 if hostname.is_empty() {
                     errs.push("[system] key 'hostname' must be a non-empty string".into());
                 } else if !is_hostname(&hostname) {
@@ -245,7 +264,13 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
             }
         },
     };
-
+    (hostname, timezone, locale, keymap)
+}
+/// 11.4 category parse: partitions.
+fn parse_partitions(
+    doc: &toml::Table,
+    errs: &mut Vec<String>,
+) -> (ByteSize, ByteSize, ByteSize, ByteSize, ByteSize) {
     // 11.4.6 partition sizes
     let (esp, slot_a, slot_b, var, home) = match doc.get("partitions") {
         None => {
@@ -260,7 +285,7 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
                 ByteSize(0),
             )
         }
-        Some(v) => match table(v, "partitions", &mut errs) {
+        Some(v) => match table(v, "partitions", errs) {
             None => (
                 ByteSize(0),
                 ByteSize(0),
@@ -273,29 +298,32 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
                     t,
                     "partitions",
                     &["esp", "slot_a", "slot_b", "var", "home"],
-                    &mut errs,
+                    errs,
                 );
                 (
-                    size_key(t, "partitions", "esp", &mut errs),
-                    size_key(t, "partitions", "slot_a", &mut errs),
-                    size_key(t, "partitions", "slot_b", &mut errs),
-                    size_key(t, "partitions", "var", &mut errs),
-                    size_key(t, "partitions", "home", &mut errs),
+                    size_key(t, "partitions", "esp", errs),
+                    size_key(t, "partitions", "slot_a", errs),
+                    size_key(t, "partitions", "slot_b", errs),
+                    size_key(t, "partitions", "var", errs),
+                    size_key(t, "partitions", "home", errs),
                 )
             }
         },
     };
-
+    (esp, slot_a, slot_b, var, home)
+}
+/// 11.4 category parse: filesystems.
+fn parse_filesystems(doc: &toml::Table, errs: &mut Vec<String>) -> (SlotFs, StateFs, StateFs) {
     // 11.4.7 filesystem choices
     let (fs_slot, fs_var, fs_home) = match doc.get("filesystems") {
         None => {
             errs.push("category '[filesystems]' missing (required: slot, var, home)".into());
             (SlotFs::Eros, StateFs::Btrfs, StateFs::Btrfs)
         }
-        Some(v) => match table(v, "filesystems", &mut errs) {
+        Some(v) => match table(v, "filesystems", errs) {
             None => (SlotFs::Eros, StateFs::Btrfs, StateFs::Btrfs),
             Some(t) => {
-                unknown_keys(t, "filesystems", &["slot", "var", "home"], &mut errs);
+                unknown_keys(t, "filesystems", &["slot", "var", "home"], errs);
                 let fs_slot = match t.get("slot") {
                     None => {
                         errs.push("[filesystems] key 'slot' missing".into());
@@ -315,31 +343,37 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
                         SlotFs::Eros
                     }
                 };
-                let fs_var = state_fs_key(t, "filesystems", "var", &mut errs);
-                let fs_home = state_fs_key(t, "filesystems", "home", &mut errs);
+                let fs_var = state_fs_key(t, "filesystems", "var", errs);
+                let fs_home = state_fs_key(t, "filesystems", "home", errs);
                 (fs_slot, fs_var, fs_home)
             }
         },
     };
-
+    (fs_slot, fs_var, fs_home)
+}
+/// 11.4 category parse: encryption.
+fn parse_encryption(doc: &toml::Table, errs: &mut Vec<String>) -> (Encryption, Encryption) {
     // 11.4.8 encryption choices
     let (enc_var, enc_home) = match doc.get("encryption") {
         None => {
             errs.push("category '[encryption]' missing (required: var, home)".into());
             (Encryption::None, Encryption::None)
         }
-        Some(v) => match table(v, "encryption", &mut errs) {
+        Some(v) => match table(v, "encryption", errs) {
             None => (Encryption::None, Encryption::None),
             Some(t) => {
-                unknown_keys(t, "encryption", &["var", "home"], &mut errs);
+                unknown_keys(t, "encryption", &["var", "home"], errs);
                 (
-                    enc_key(t, "encryption", "var", &mut errs),
-                    enc_key(t, "encryption", "home", &mut errs),
+                    enc_key(t, "encryption", "var", errs),
+                    enc_key(t, "encryption", "home", errs),
                 )
             }
         },
     };
-
+    (enc_var, enc_home)
+}
+/// 11.4 category parse: users.
+fn parse_users(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<User> {
     // 11.4.9 initial users
     let users = match doc.get("users") {
         None => {
@@ -362,7 +396,7 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
                         continue;
                     }
                 };
-                unknown_keys(item, &what, &["name", "shell"], &mut errs);
+                unknown_keys(item, &what, &["name", "shell"], errs);
                 let name = match item.get("name") {
                     None => {
                         errs.push(format!("{what} key 'name' missing"));
@@ -406,17 +440,20 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
             Vec::new()
         }
     };
-
+    users
+}
+/// 11.4 category parse: ssh.
+fn parse_ssh(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<String> {
     // 11.4.10 SSH authorized keys
     let ssh_keys = match doc.get("ssh") {
         None => {
             errs.push("category '[ssh]' missing (required: authorized_keys)".into());
             Vec::new()
         }
-        Some(v) => match table(v, "ssh", &mut errs) {
+        Some(v) => match table(v, "ssh", errs) {
             None => Vec::new(),
             Some(t) => {
-                unknown_keys(t, "ssh", &["authorized_keys"], &mut errs);
+                unknown_keys(t, "ssh", &["authorized_keys"], errs);
                 let keys = match t.get("authorized_keys") {
                     None => {
                         errs.push("[ssh] key 'authorized_keys' missing".into());
@@ -451,17 +488,20 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
             }
         },
     };
-
+    ssh_keys
+}
+/// 11.4 category parse: services.
+fn parse_services(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<String> {
     // 11.4.11 service enablement policy
     let services = match doc.get("services") {
         None => {
             errs.push("category '[services]' missing (required: enabled)".into());
             Vec::new()
         }
-        Some(v) => match table(v, "services", &mut errs) {
+        Some(v) => match table(v, "services", errs) {
             None => Vec::new(),
             Some(t) => {
-                unknown_keys(t, "services", &["enabled"], &mut errs);
+                unknown_keys(t, "services", &["enabled"], errs);
                 let units = match t.get("enabled") {
                     None => {
                         errs.push("[services] key 'enabled' missing".into());
@@ -496,32 +536,7 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
             }
         },
     };
-
-    if !errs.is_empty() {
-        return Err(errs);
-    }
-    Ok(Config {
-        target_disk,
-        source_base,
-        version,
-        hostname,
-        timezone,
-        locale,
-        keymap,
-        esp,
-        slot_a,
-        slot_b,
-        var,
-        home,
-        fs_slot,
-        fs_var,
-        fs_home,
-        enc_var,
-        enc_home,
-        users,
-        ssh_keys,
-        services,
-    })
+    services
 }
 
 // ---------------------------------------------------------------- helpers ---
@@ -540,8 +555,22 @@ fn table<'a>(v: &'a toml::Value, cat: &str, errs: &mut Vec<String>) -> Option<&'
 
 /// System accounts the install config must not shadow.
 const RESERVED_USER_NAMES: [&str; 16] = [
-    "root", "bin", "daemon", "adm", "lp", "sync", "mail", "news", "uucp", "operator",
-    "games", "ftp", "nobody", "nobody4", "systemd-network", "tss",
+    "root",
+    "bin",
+    "daemon",
+    "adm",
+    "lp",
+    "sync",
+    "mail",
+    "news",
+    "uucp",
+    "operator",
+    "games",
+    "ftp",
+    "nobody",
+    "nobody4",
+    "systemd-network",
+    "tss",
 ];
 
 /// A valid user name: useradd-compatible, lowercase, not a reserved
