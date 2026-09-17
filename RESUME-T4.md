@@ -49,10 +49,13 @@ A/B harness).
   UKI bytes against the artifact, and records `bootctl status` in
   the log. The boot phase is verification, not construction:
   bootctl install is baked into the prebuilt ESP artifact.
-- **Tests.** 46 installer unit tests + 5 CLI contract tests
+- **Tests.** 49 installer unit tests + 5 CLI contract tests
   (args, exit codes, stderr): config parse/validate diagnostics,
-  layout computation, exact repart def rendering, capacity and
-  tool-availability preflights, UKI validation.
+  layout computation (incl. the `mkfs_set` tool-set derivation),
+  exact repart def rendering, capacity and tool-availability
+  preflights, UKI validation. Test modules live next to their
+  crates (`config/tests.rs`, `engine/tests.rs`, `layout/tests.rs`);
+  parsing lives in `config/parse.rs` (one function per category).
 
 ## Preflights (fail before the first write)
 
@@ -60,8 +63,13 @@ A/B harness).
 - UEFI mode active on the running machine (run path only; Ingot
   installs UEFI targets only).
 - Required tools present in PATH (systemd-repart, dd, losetup,
-  partprobe, qemu-img, blkid, bootctl, mount, umount, sync, df,
-  plus the layout's mkfs set) - 11.5 phase 1.
+  partprobe, qemu-img, blkid, mount, umount, sync, df, plus the
+  layout's mkfs set - `layout::mkfs_set`, which skips the
+  unformatted free slot) - 11.5 phase 1. `bootctl` is NOT in the
+  hard set: its use is best-effort at runtime (the ESP artifact is
+  prebuilt). The preflight previously demanded every partition's
+  mkfs binary including `mkfs.unformatted` - a bug that blocked
+  every real run; fixed in the second review round.
 - Target is a qcow2 or raw file / block device (root for disk
   ops).
 - Work volume free space >= disk virtual size.
@@ -74,15 +82,19 @@ A/B harness).
 2. Slot A: 8 GiB erofs of the `/usr` tree (os-release Ingot
    0.1.0, factory tree present); slot B: `_empty` unformatted.
 3. `/var/lib/etc` initialized: factory defaults + hostname,
-   localtime -> `/usr/share/zoneinfo/CST` (runtime path), locale,
-   user `tommy` (uid 1000, shell, shadow 0600, authorized_keys
-   600).
+   localtime -> `/usr/share/zoneinfo/America/Chicago` (runtime
+   path - the release ships no bare `CST` zone), locale, keymap,
+   machine-id (fresh 32-hex random per install, 11.5 P6), user
+   `tommy` (uid 1000, shell, shadow 0600, authorized_keys 600).
 4. ESP: `EFI/BOOT/BOOTX64.EFI`, `EFI/systemd/...`,
    `EFI/Linux/ingot_0.1.0.efi` byte-exact vs the artifact.
 5. `bootctl status` on the target shows systemd-boot on the
-   loader; engine phase log in `/var/lib/ingot/install.log`.
+   loader; engine phase log in `/var/lib/ingot/install.log`
+   (partprobe outcome logged, `target-warning` recorded).
 6. `--dry-run` qcow2: sha256 identical before/after.
-7. Workspace tests: 46 installer + 5 CLI + 16 update-helper
+7. The 11.6.1 destructive warning is printed to stderr and logged
+   before the first write (second review round).
+8. Workspace tests: 49 installer + 5 CLI + 16 update-helper
    green.
 
 ## Resume procedure (T5+)
@@ -95,8 +107,10 @@ A/B harness).
   the repo's `dist/`).
 - Real run: same without `--dry-run`; add `--work /big/dir` when
   `/run` is too small for the disk's virtual size.
-- The qcow2 target must be created first:
-  `qemu-img create -f qcow2 t4/disk.qcow2 29G`.
+- The qcow2 target must be created first, and must hold the
+  layout (29 GiB + GPT overhead): use 30G, not 29G - a 29G
+  virtual disk fails the capacity preflight by 2 MiB:
+  `qemu-img create -f qcow2 t4/disk.qcow2 30G`.
 
 ## Known gaps (image side, not installer)
 
@@ -105,6 +119,15 @@ A/B harness).
   `service-skip` and continues - the spec allows enabling only
   shipped units. T5+ wants sshd in the image for the workstation
   profile.
+- The image does not ship `nushell` even though the spec makes it
+  the required default interactive shell (spec 3.1, 11.4, 20.1)
+  and the config's default shell is `/usr/bin/nushell`. The
+  release validation (shell must exist in the slot) correctly
+  rejects configs that use it until the image installs it. The
+  compose archive carries `nushell-0.99.1-8.fc46.x86_64.rpm`, so
+  adding it to the mkosi `Packages=` list is a one-line image
+  change (T5+). Verify installs with `shell = "/usr/bin/bash"`
+  in the meantime.
 - Factory tree has no base-system users
   (`/usr/lib/users/0001.toml` missing): `shadow`/`passwd`/`group`
   get only the configured users. Image build should add the base
@@ -120,10 +143,11 @@ A/B harness).
   (operator-facing one-line diagnostics) instead of the
   update-helper's `anyhow::Context`. Consistent within the crate;
   a future change should pick one idiom workspace-wide.
+- File-size guardrail (files under 500 lines): config parsing in
+  `config/parse.rs`, test modules in per-crate `tests.rs` files.
+  All installer product files land under the limit.
 - `DiskTarget::prepare` builds the 7-field struct per target kind;
   a builder would be speculative until a fourth kind appears.
-- config.rs is large (parse glue + 9 category fns + tests); if it
-  grows, split the test module into `tests/` integration tests.
 
 ## Follow-up tickets
 
