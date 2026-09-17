@@ -1,0 +1,33 @@
+# Ingot Rust workspace (spec 7.1: the installer and update-helper are the
+# two Ingot binaries, built from the in-repo source; the upstream Rust
+# components are pinned separately in tools/pins.json).
+#
+# The image build consumes this workspace directly (image/mkosi.prepare
+# primes the cargo registry from this manifest, image/mkosi.build.chroot
+# builds it --locked --offline), so Cargo.lock is committed: the crate
+# versions are part of the build pin, like the compose and source pins.
+[workspace]
+resolver = "2"
+members = ["update-helper"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# blocking HTTP client for the GitHub Releases API (rustls: the image has
+# no OpenSSL development packages; pure-Rust TLS keeps the build self-
+# contained)
+ureq = "3.4"
+# error context for the narrow CLI
+anyhow = "1.0"
+# pure-Rust OpenPGP: manifest/SHA256SUMS signature verification without
+# a system gpg (the image carries no gpg package). Default (nettle)
+# crypto backend: the build chroot has no libclang for nettle-sys's
+# bindgen, so the build supplies the pregenerated nettle bindings
+# (src/update-helper/build/nettle-bindings.rs, NETTLE_PREGENERATED_BINDINGS);
+# the image carries libnettle as a runtime dependency.
+sequoia-openpgp = "2.4"
+

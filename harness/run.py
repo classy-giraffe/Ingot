@@ -277,6 +277,10 @@ def t1_checks(p, ev, esp_state):
     add("esp_default", esp_state["default"] == want,
         f"default={esp_state['default']!r}")
 
+    # 10. T3: the update helper is present in the slot and runs
+    add("update_helper", p.get("helper_ok") == 1,
+        f"helper_ok={p.get('helper_ok')!r}")
+
     return checks
 
 

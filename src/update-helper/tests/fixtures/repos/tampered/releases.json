@@ -1,0 +1,26 @@
+[
+  {
+    "id": 9000,
+    "tag_name": "v1.0.0",
+    "target_commitish": "main",
+    "name": "Ingot 1.0.0",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-09-01T10:00:00Z",
+    "published_at": "2026-09-01T10:00:00Z",
+    "assets": [
+      {
+        "name": "ingot_1.0.0.root.erofs",
+        "browser_download_url": "https://github.com/classy-giraffe/Ingot/releases/download/v1.0.0/ingot_1.0.0.root.erofs",
+        "size": 1024,
+        "download_count": 0
+      },
+      {
+        "name": "ingot_1.0.0.efi",
+        "browser_download_url": "https://github.com/classy-giraffe/Ingot/releases/download/v1.0.0/ingot_1.0.0.efi",
+        "size": 1024,
+        "download_count": 0
+      }
+    ]
+  }
+]

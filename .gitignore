@@ -5,3 +5,5 @@ image/mkosi.conf.d/
 # python
 __pycache__/
 *.pyc
+# rust build artifacts
+src/target/

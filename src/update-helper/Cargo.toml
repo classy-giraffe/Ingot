@@ -1,0 +1,15 @@
+[package]
+name = "ingot-update-helper"
+description = "Ingot update helper: latest-release discovery, manifest authentication, and per-tag asset URL pinning for systemd-sysupdate"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ingot-update-helper"
+path = "src/main.rs"
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ureq = { workspace = true }
+sequoia-openpgp = { workspace = true }

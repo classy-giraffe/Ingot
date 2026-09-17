@@ -1,12 +1,14 @@
 #!/bin/sh
 # Main image prepare script. Runs in two phases:
-#   - arg "final": after OS package install (no build overlay): fetch the
-#     pinned brush source into the artifacts directory (consumed by the
-#     build script; not part of the image payload) and set the machine
+#   - arg "final": after OS package install (no build overlay): fetch
+#     the pinned brush source and stage the in-repo Rust workspace
+#     (src/) into the artifacts directory (consumed by the build
+#     script; not part of the image payload) and set the machine
 #     identity in the image root.
-#   - arg "build": no-op: the brush cargo build runs in the build script
-#     (chroot), which sees both the build-overlay toolchain (cargo, gcc)
-#     and the pinned source staged by the final phase.
+#   - arg "build": prime the cargo registry (crates.io, with network)
+#     for both Rust builds - the pinned brush build and the in-repo
+#     workspace build - which the build script (chroot, no network)
+#     runs --offline against that cache.
 #
 # Host-side script (no .chroot): network + host tools available.
 # $BUILDROOT is the image root; $ARTIFACTDIR is a per-image scratch
@@ -42,6 +44,21 @@ final)
     cp -a "$src" "$ARTIFACTDIR/brush-source"
     echo "ingot: brush source ${BRUSH_SHA} staged at /work/artifacts/brush-source" >&2
 
+    # --- Ingot workspace source (src/ in the repo) into the artifacts
+    #     dir (not the payload): the in-repo Rust workspace (spec 7.1:
+    #     installer + update-helper) is staged like the pinned brush
+    #     source; the build script copies it into the chroot. The tree
+    #     is mounted by mkosi from BuildSources=../src:ingot-src
+    #     (image/mkosi.conf) at $SRCDIR/ingot-src.
+    src_root=${SRCDIR:-/work/src}/ingot-src
+    [ -f "$src_root/Cargo.toml" ] \
+        || { echo "final: $src_root/Cargo.toml missing (BuildSources?)" >&2; exit 1; }
+    rm -rf "$ARTIFACTDIR/ingot-source"
+    mkdir -p "$ARTIFACTDIR/ingot-source"
+    cp -a "$src_root/." "$ARTIFACTDIR/ingot-source/"
+    rm -rf "$ARTIFACTDIR/ingot-source/target"
+    echo "ingot: workspace source staged at /work/artifacts/ingot-source" >&2
+
     # --- machine identity (overrides the distro os-release; mkosi appends
     #     IMAGE_ID/IMAGE_VERSION to it later). The built version comes from
     #     the per-build conf.d drop-in (Environment=OS_VERSION); the static
@@ -62,7 +79,7 @@ EOF
 
 build)
     # Prime the cargo registry (index + crate sources) for the pinned
-    # brush build, using the image's own toolchain (build overlay) with
+    # brush build and the in-repo workspace build, using the image's
     # network access (prepare scripts always run with network). The
     # cache lands in the artifacts dir, which the build script (chroot,
     # no network by default) reuses with --offline: the build itself is
@@ -73,6 +90,10 @@ build)
         || { echo "build: brush source missing (run the final phase first)" >&2; exit 1; }
     mkosi-chroot env CARGO_HOME=/work/artifacts/cargo-home HOME=/ \
         cargo fetch --locked --manifest-path /work/artifacts/brush-source/Cargo.toml
+    [ -d "$ARTIFACTDIR/ingot-source" ] \
+        || { echo "build: ingot workspace source missing (run the final phase first)" >&2; exit 1; }
+    mkosi-chroot env CARGO_HOME=/work/artifacts/cargo-home HOME=/ \
+        cargo fetch --locked --manifest-path /work/artifacts/ingot-source/Cargo.toml
     echo "ingot: cargo registry primed at /work/artifacts/cargo-home" >&2
     ;;
 
