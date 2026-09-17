@@ -1,18 +1,5 @@
 //! Command-line interface: argument parsing, usage text, exit codes.
-//!
-//! ```text
-//! ingot-installer [OPTIONS] <CONFIG>
-//!
-//! OPTIONS:
-//!   -h, --help       Print help
-//!       --dry-run    Report the plan without touching the disk
-//!       --work <DIR> Working directory (default /run/ingot-install)
-//!   -V, --version    Print version
-//!
-//! Exit codes: 0 success (install done, or plan reported with
-//! --dry-run); 1 execution or verification failure; 2 usage or
-//! config parse error.
-//! ```
+//! The usage text in `USAGE` is the single source of truth.
 
 use std::path::PathBuf;
 

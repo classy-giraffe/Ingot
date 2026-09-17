@@ -538,8 +538,18 @@ fn table<'a>(v: &'a toml::Value, cat: &str, errs: &mut Vec<String>) -> Option<&'
     }
 }
 
-/// A valid user name: useradd-compatible, lowercase.
-fn is_user_name(name: &str) -> bool {
+/// System accounts the install config must not shadow.
+const RESERVED_USER_NAMES: [&str; 16] = [
+    "root", "bin", "daemon", "adm", "lp", "sync", "mail", "news", "uucp", "operator",
+    "games", "ftp", "nobody", "nobody4", "systemd-network", "tss",
+];
+
+/// A valid user name: useradd-compatible, lowercase, not a reserved
+/// system account.
+pub(crate) fn is_user_name(name: &str) -> bool {
+    if RESERVED_USER_NAMES.contains(&name) {
+        return false;
+    }
     let b = name.as_bytes();
     if !(1..=32).contains(&b.len()) {
         return false;
@@ -552,7 +562,7 @@ fn is_user_name(name: &str) -> bool {
 }
 
 /// A valid systemd unit name (v1 suffixes).
-fn is_unit_name(name: &str) -> bool {
+pub(crate) fn is_unit_name(name: &str) -> bool {
     const SUFFIXES: [&str; 5] = [".service", ".socket", ".path", ".timer", ".target"];
     (1..=255).contains(&name.len())
         && name
@@ -678,6 +688,27 @@ fn unknown_keys(t: &toml::Table, cat: &str, allowed: &[&str], errs: &mut Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_names_reserved_and_shape() {
+        assert!(is_user_name("tommy"));
+        assert!(is_user_name("a-b_c9"));
+        assert!(!is_user_name("Tommy"));
+        assert!(!is_user_name(""));
+        assert!(!is_user_name("bad:name"));
+        assert!(!is_user_name("root"));
+        assert!(!is_user_name("nobody"));
+        assert!(!is_user_name("systemd-network"));
+    }
+
+    #[test]
+    fn unit_names_v1_suffixes() {
+        assert!(is_unit_name("sshd.service"));
+        assert!(is_unit_name("ssh@server.service"));
+        assert!(!is_unit_name("no-dot"));
+        assert!(!is_unit_name(".hidden.service"));
+        assert!(!is_unit_name("bad;unit.service"));
+    }
 
     /// A minimal valid config with all 11.4 categories.
     fn valid() -> String {

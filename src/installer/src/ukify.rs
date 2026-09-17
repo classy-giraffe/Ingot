@@ -27,7 +27,7 @@ pub struct UkiSections {
 /// count, optional-header size), and the section headers
 /// (name, raw pointer, raw size). The PE optional header is skipped
 /// by its declared size and never interpreted.
-pub fn parse_sections(bytes: &mut [u8]) -> Result<UkiSections, String> {
+pub fn parse_sections(bytes: &[u8]) -> Result<UkiSections, String> {
     if bytes.len() < 0x40 || bytes[0] != b'M' || bytes[1] != b'Z' {
         return Err("not a PE image (missing MZ header)".into());
     }
@@ -97,7 +97,7 @@ pub fn parse_sections(bytes: &mut [u8]) -> Result<UkiSections, String> {
 /// assigns; the UKI's command line must point at them exactly.
 /// `version` must appear as the os-release VERSION_ID.
 pub fn validate_uki(
-    bytes: &mut [u8],
+    bytes: &[u8],
     version: &str,
     slot_a_uuid: &str,
     state_uuid: &str,
@@ -182,38 +182,38 @@ mod tests {
 
     #[test]
     fn parses_cmdline_and_osrel() {
-        let mut img = pe(&[(".cmdline", CMDLINE), (".osrel", OSREL)]);
-        let s = parse_sections(&mut img).unwrap();
+        let img = pe(&[(".cmdline", CMDLINE), (".osrel", OSREL)]);
+        let s = parse_sections(&img).unwrap();
         assert_eq!(s.cmdline, std::str::from_utf8(CMDLINE).unwrap());
         assert_eq!(s.osrel, std::str::from_utf8(OSREL).unwrap());
     }
 
     #[test]
     fn rejects_non_pe() {
-        let mut junk = vec![0u8; 256];
-        assert!(parse_sections(&mut junk).unwrap_err().contains("MZ"));
+        let junk = vec![0u8; 256];
+        assert!(parse_sections(&junk).unwrap_err().contains("MZ"));
     }
 
     #[test]
     fn rejects_wrong_machine() {
         let mut img = pe(&[(".cmdline", CMDLINE), (".osrel", OSREL)]);
         img[0x44..0x46].copy_from_slice(&0x0100u16.to_le_bytes()); // i386
-        assert!(parse_sections(&mut img).unwrap_err().contains("x86_64"));
+        assert!(parse_sections(&img).unwrap_err().contains("x86_64"));
     }
 
     #[test]
     fn rejects_missing_section() {
-        let mut img = pe(&[(".cmdline", CMDLINE)]);
-        assert!(parse_sections(&mut img).unwrap_err().contains(".osrel"));
-        let mut img = pe(&[(".osrel", OSREL)]);
-        assert!(parse_sections(&mut img).unwrap_err().contains(".cmdline"));
+        let img = pe(&[(".cmdline", CMDLINE)]);
+        assert!(parse_sections(&img).unwrap_err().contains(".osrel"));
+        let img = pe(&[(".osrel", OSREL)]);
+        assert!(parse_sections(&img).unwrap_err().contains(".cmdline"));
     }
 
     #[test]
     fn validates_matching_uki() {
-        let mut img = pe(&[(".cmdline", CMDLINE), (".osrel", OSREL)]);
+        let img = pe(&[(".cmdline", CMDLINE), (".osrel", OSREL)]);
         let s = validate_uki(
-            &mut img,
+            &img,
             "0.1.0",
             "0066bfe5-47f1-52dc-9a16-1bb10191a1dc",
             "501347aa-775a-5736-8da3-2a9977c820ec",
@@ -224,9 +224,9 @@ mod tests {
 
     #[test]
     fn rejects_wrong_partuuid() {
-        let mut img = pe(&[(".cmdline", CMDLINE), (".osrel", OSREL)]);
+        let img = pe(&[(".cmdline", CMDLINE), (".osrel", OSREL)]);
         let err = validate_uki(
-            &mut img,
+            &img,
             "0.1.0",
             "deadbeef-dead-beef-dead-beefdeadbeef",
             "501347aa-775a-5736-8da3-2a9977c820ec",
@@ -234,9 +234,9 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("usr"), "{err}");
 
-        let mut img = pe(&[(".cmdline", CMDLINE), (".osrel", OSREL)]);
+        let img = pe(&[(".cmdline", CMDLINE), (".osrel", OSREL)]);
         let err = validate_uki(
-            &mut img,
+            &img,
             "0.1.0",
             "0066bfe5-47f1-52dc-9a16-1bb10191a1dc",
             "deadbeef-dead-beef-dead-beefdeadbeef",
@@ -247,9 +247,9 @@ mod tests {
 
     #[test]
     fn rejects_wrong_version() {
-        let mut img = pe(&[(".cmdline", CMDLINE), (".osrel", OSREL)]);
+        let img = pe(&[(".cmdline", CMDLINE), (".osrel", OSREL)]);
         let err = validate_uki(
-            &mut img,
+            &img,
             "9.9.9",
             "0066bfe5-47f1-52dc-9a16-1bb10191a1dc",
             "501347aa-775a-5736-8da3-2a9977c820ec",

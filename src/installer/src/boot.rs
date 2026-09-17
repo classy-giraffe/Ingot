@@ -70,8 +70,7 @@ pub fn verify(
             )
             .trim()
             .to_string();
-            log.log_result("boot", "bootctl-status", Some(text))
-                .map_err(|e| e.to_string())?;
+            log.log_result("boot", "bootctl-status", Some(text))?;
         }
         Err(e) => log.log_result(
             "boot",

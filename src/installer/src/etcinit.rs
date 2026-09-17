@@ -24,44 +24,6 @@ use std::path::{Path, PathBuf};
 use crate::config::Config;
 use crate::log::InstallLog;
 
-/// Validates a user name before it is written into passwd/group.
-fn check_user_name(name: &str) -> Result<(), String> {
-    if name.is_empty() || name.len() > 32 {
-        return Err(format!("user name {name:?} must be 1-32 characters"));
-    }
-    if name.starts_with('-') || name.starts_with('.') {
-        return Err(format!("user name {name:?} must not start with '-' or '.'"));
-    }
-    if name
-        .chars()
-        .any(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
-    {
-        return Err(format!("user name {name:?} has invalid characters"));
-    }
-    if [
-        "root", "nobody", "daemon", "bin", "sys", "adm", "lp", "mail", "news", "uucp", "operator",
-        "games", "ftp", "nuux", "nobody4",
-    ]
-    .contains(&name.to_ascii_lowercase().as_str())
-    {
-        return Err(format!("user name {name:?} collides with a system account"));
-    }
-    Ok(())
-}
-
-/// Validates a systemd unit name.
-fn check_unit_name(unit: &str) -> Result<(), String> {
-    let valid = !unit.is_empty()
-        && unit.len() <= 255
-        && unit.chars().all(|c| {
-            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '@' | ':' | '+' | '~' | '-')
-        });
-    if !valid || !unit.contains('.') {
-        return Err(format!("service {unit:?} is not a valid systemd unit name"));
-    }
-    Ok(())
-}
-
 /// Appends a line to a file, creating it with 0644 if missing.
 fn append_line(path: &Path, line: &str) -> Result<(), String> {
     let mut f = fs::OpenOptions::new()
@@ -139,7 +101,6 @@ fn seed_factory(var: &Path, slot: &Path, log: &InstallLog) -> Result<(), String>
             "/var/lib/<redacted> seeded from /usr/share/factory/etc"
         )),
     )
-    .map_err(|e| e)
 }
 
 /// Initializes /var/lib/etc and the home directories from the
@@ -200,7 +161,9 @@ pub fn run(
     let mut uid = 1000u32;
     let mut gid = 1000u32;
     for u in &cfg.users {
-        check_user_name(&u.name)?;
+        if !crate::config::is_user_name(&u.name) {
+            return Err(format!("user name {:?} is invalid", u.name));
+        }
         let shell = u
             .shell
             .clone()
@@ -277,7 +240,9 @@ pub fn run(
     // --- services ---------------------------------------------------------
     let wants = etc.join("systemd/system/multi-user.target.wants");
     for unit in &cfg.services {
-        check_unit_name(unit)?;
+        if !crate::config::is_unit_name(unit) {
+            return Err(format!("service {unit:?} is not a valid systemd unit name"));
+        }
         let shipped = slot.join(format!("lib/systemd/system/{unit}"));
         if !shipped.is_file() {
             log.log_result(
@@ -301,28 +266,3 @@ pub fn run(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn user_names_validated() {
-        assert!(check_user_name("tommy").is_ok());
-        assert!(check_user_name("a-b_c9").is_ok());
-        assert!(check_user_name("").is_err());
-        assert!(check_user_name("-root").is_err());
-        assert!(check_user_name(".hidden").is_err());
-        assert!(check_user_name("bad:name").is_err());
-        assert!(check_user_name("root").is_err());
-        assert!(check_user_name("nobody").is_err());
-    }
-
-    #[test]
-    fn unit_names_validated() {
-        assert!(check_unit_name("sshd.service").is_ok());
-        assert!(check_unit_name("ssh@server.service").is_ok());
-        assert!(check_unit_name("no-dot").is_err());
-        assert!(check_unit_name("bad;unit.service").is_err());
-        assert!(check_unit_name("").is_err());
-    }
-}

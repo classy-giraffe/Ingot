@@ -17,6 +17,12 @@ pub struct Version {
     pub patch: u64,
 }
 
+impl Default for Version {
+    fn default() -> Self {
+        Version { major: 0, minor: 0, patch: 0 }
+    }
+}
+
 impl fmt::Display for Version {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}.{}.{}", self.major, self.minor, self.patch)

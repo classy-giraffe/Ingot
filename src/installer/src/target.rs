@@ -58,7 +58,7 @@ fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
 }
 
 /// True when `path` names a block device (has a /sys/block entry).
-fn is_block_device(path: &Path) -> bool {
+pub(crate) fn is_block_device(path: &Path) -> bool {
     match path.file_name() {
         Some(name) => Path::new("/sys/block").join(name).is_dir(),
         None => false,

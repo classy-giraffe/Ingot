@@ -26,7 +26,7 @@ use crate::log::InstallLog;
 use crate::repart;
 use crate::size::human;
 use crate::source::{self, Artifact};
-use crate::target::DiskTarget;
+use crate::target::{self, DiskTarget};
 use crate::ukify;
 
 /// The validated install plan.
@@ -43,19 +43,11 @@ pub struct Plan {
     pub disk_format: String,
 }
 
-/// True when `path` names a block device (has a /sys/block entry).
-fn is_block_device(path: &Path) -> bool {
-    match path.file_name() {
-        Some(name) => Path::new("/sys/block").join(name).is_dir(),
-        None => false,
-    }
-}
-
 /// Disk size without touching the disk: read-only.
 fn disk_size(path: &Path) -> Result<(u64, String), String> {
     let meta = fs::metadata(path)
         .map_err(|e| format!("target disk not accessible: {}: {e}", path.display()))?;
-    if is_block_device(path) {
+    if target::is_block_device(path) {
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -122,11 +114,11 @@ pub fn plan(cfg: Config) -> Result<Plan, String> {
         .iter()
         .find(|a| a.kind == "efi")
         .expect("artifact set always contains the efi");
-    let mut bytes = fs::read(&uki.path)
+    let bytes = fs::read(&uki.path)
         .map_err(|e| format!("cannot read UKI artifact {}: {e}", uki.path.display()))?;
     let version_str = cfg.version.to_string();
     ukify::validate_uki(
-        &mut bytes,
+        &bytes,
         &version_str,
         layout::SLOT_A_UUID,
         layout::VAR_UUID,
@@ -347,8 +339,19 @@ fn run_phases(
     deploy::deploy(&plan.artifacts, &parts, log)?;
 
     // 4. mounts for content initialization
-    let var_fs = plan.layout.partitions[3].fs.as_str();
-    let home_fs = plan.layout.partitions[4].fs.as_str();
+    // Look the filesystems up by role: the partition order is a
+    // layout.rs invariant, not something the engine re-encodes.
+    let fs_of = |role: layout::Role| -> &str {
+        plan.layout
+            .partitions
+            .iter()
+            .find(|p| p.role == role)
+            .expect("the layout always contains every role")
+            .fs
+            .as_str()
+    };
+    let var_fs = fs_of(layout::Role::Var);
+    let home_fs = fs_of(layout::Role::Home);
     let var_dev = parts.get("var.raw").unwrap().clone();
     let home_dev = parts.get("home.raw").unwrap().clone();
     let esp_dev = parts.get("esp.raw").unwrap().clone();

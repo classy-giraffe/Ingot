@@ -16,10 +16,9 @@ use size::ByteSize;
 use version::Version;
 
 /// One mebibyte.
-pub const MIB: u64 = 1 << 20;
 
 /// First partition offset (after the protective MBR and align gap).
-pub const FIRST_OFFSET: u64 = MIB;
+pub const FIRST_OFFSET: u64 = size::MIB;
 
 // Fixed PARTUUIDs (image/repart-baseline). MUST NOT drift from the
 // image build; the UKI hardcodes them.
@@ -155,7 +154,7 @@ pub fn compute(cfg: &Config) -> Layout {
     }
     let used_bytes = offset;
     // GPT tail metadata needs a little room; require 1 MiB headroom.
-    let required_disk_bytes = used_bytes + MIB;
+    let required_disk_bytes = used_bytes + size::MIB;
     Layout {
         version: cfg.version.clone(),
         partitions,
@@ -304,7 +303,7 @@ enabled = []
     #[test]
     fn required_disk_is_used_plus_headroom() {
         let layout = compute(&cfg());
-        assert_eq!(layout.required_disk_bytes, layout.used_bytes + MIB);
+        assert_eq!(layout.required_disk_bytes, layout.used_bytes + size::MIB);
         // exact fit passes, one byte short fails
         assert!(check_disk(&layout, layout.required_disk_bytes).is_ok());
         assert!(check_disk(&layout, layout.required_disk_bytes - 1).is_err());
