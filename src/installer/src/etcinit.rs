@@ -165,17 +165,21 @@ pub fn run(
         .map_err(|e| format!("cannot write hostname: {e}"))?;
     log.log_result("etcinit", "hostname", Some(cfg.hostname.clone()))?;
 
-    let tz_path = slot.join(format!("share/zoneinfo/{}", cfg.timezone));
-    if !tz_path.is_file() {
+    // Verify the zone exists in the installed release, then link the
+    // runtime path: the slot mounts at /usr on the installed system,
+    // so /usr/share/zoneinfo/<tz> is stable there (linking the
+    // install-time mount point would dangle).
+    let tz_rel = format!("share/zoneinfo/{}", cfg.timezone);
+    if !slot.join(&tz_rel).is_file() {
         return Err(format!(
-            "timezone {0:?} not found in the installed release (expected {1})",
-            cfg.timezone,
-            tz_path.display()
+            "timezone {0:?} not found in the installed release (expected /usr/{1})",
+            cfg.timezone, tz_rel
         ));
     }
     let lt = etc.join("localtime");
     let _ = fs::remove_file(&lt);
-    std::os::unix::fs::symlink(tz_path, &lt).map_err(|e| format!("cannot link localtime: {e}"))?;
+    std::os::unix::fs::symlink(format!("/usr/{tz_rel}"), &lt)
+        .map_err(|e| format!("cannot link localtime: {e}"))?;
     log.log_result("etcinit", "timezone", Some(cfg.timezone.clone()))?;
 
     fs::write(etc.join("locale.conf"), format!("LANG={}\n", cfg.locale))
