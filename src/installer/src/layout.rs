@@ -197,11 +197,16 @@ pub fn repart_defs(layout: &Layout) -> Vec<(String, String)> {
             let name = format!("{}-{}.conf", p.index, p.label);
         let format_line = if p.fs == "unformatted" {
             String::new()
+        } else if p.fs == "erofs" {
+            // Match the image build baseline (image/repart-baseline/
+            // 20-slot-a.conf): whole-image deployment overwrites the
+            // formatted filesystem, but the def stays baseline-pinned.
+            "Format=erofs\nCompression=zstd\n".to_string()
         } else {
             format!("Format={}\n", p.fs)
         };
         let conf = format!(
-            "[Partition]\nType={gpt}\nUUID={uuid}\nLabel={label}{fmt}SizeMinBytes={size}\nSizeMaxBytes={size}\n",
+            "[Partition]\nType={gpt}\nUUID={uuid}\nLabel={label}\n{fmt}SizeMinBytes={size}\nSizeMaxBytes={size}\n",
             gpt = p.gpt_type,
             uuid = p.part_uuid,
             label = p.label,
@@ -346,26 +351,84 @@ enabled = []
     }
 
     #[test]
-    fn repart_defs_cover_all_partitions() {
+    fn repart_defs_render_baseline_exact() {
         let layout = compute(&cfg());
         let defs = repart_defs(&layout);
         assert_eq!(defs.len(), 5);
-        let esp = &defs[0].1;
-        assert!(esp.contains("Type=esp"), "{esp}");
-        assert!(esp.contains(&format!("UUID={ESP_UUID}")), "{esp}");
-        assert!(esp.contains("Label=esp"), "{esp}");
-        assert!(esp.contains("Format=vfat"), "{esp}");
-        assert!(esp.contains("SizeMinBytes=1073741824"), "{esp}");
-        assert!(esp.contains("SizeMaxBytes=1073741824"), "{esp}");
-        let slot_a = &defs[1].1;
-        assert!(slot_a.contains("Type=usr"), "{slot_a}");
-        assert!(slot_a.contains("Label=ingot_0.1.0"), "{slot_a}");
-        assert!(slot_a.contains("Format=erofs"), "{slot_a}");
-        let slot_b = &defs[2].1;
-        assert!(slot_b.contains("Label=_empty"), "{slot_b}");
-        assert!(
-            !slot_b.contains("Format="),
-            "slot B must stay unformatted: {slot_b}"
+        let lines = |i: usize| defs[i].1.lines().collect::<Vec<_>>();
+        // The defs are baseline-pinned (image/repart-baseline/): the
+        // exact rendered content is the contract. In particular the
+        // Label line must stand alone - a glued "Label=xFormat=y"
+        // line corrupts the GPT label repart writes.
+        assert_eq!(
+            lines(0),
+            vec![
+                "[Partition]",
+                "Type=esp",
+                &format!("UUID={ESP_UUID}"),
+                "Label=esp",
+                "Format=vfat",
+                "SizeMinBytes=1073741824",
+                "SizeMaxBytes=1073741824",
+            ],
+            "{}",
+            defs[0].1
+        );
+        assert_eq!(
+            lines(1),
+            vec![
+                "[Partition]",
+                "Type=usr",
+                &format!("UUID={SLOT_A_UUID}"),
+                "Label=ingot_0.1.0",
+                "Format=erofs",
+                "Compression=zstd",
+                "SizeMinBytes=8589934592",
+                "SizeMaxBytes=8589934592",
+            ],
+            "{}",
+            defs[1].1
+        );
+        assert_eq!(
+            lines(2),
+            vec![
+                "[Partition]",
+                "Type=usr",
+                &format!("UUID={SLOT_B_UUID}"),
+                "Label=_empty",
+                "SizeMinBytes=8589934592",
+                "SizeMaxBytes=8589934592",
+            ],
+            "{}",
+            defs[2].1
+        );
+        assert_eq!(
+            lines(3),
+            vec![
+                "[Partition]",
+                "Type=var",
+                &format!("UUID={VAR_UUID}"),
+                "Label=var",
+                "Format=btrfs",
+                "SizeMinBytes=4294967296",
+                "SizeMaxBytes=4294967296",
+            ],
+            "{}",
+            defs[3].1
+        );
+        assert_eq!(
+            lines(4),
+            vec![
+                "[Partition]",
+                "Type=home",
+                &format!("UUID={HOME_UUID}"),
+                "Label=home",
+                "Format=btrfs",
+                "SizeMinBytes=8589934592",
+                "SizeMaxBytes=8589934592",
+            ],
+            "{}",
+            defs[4].1
         );
         assert_eq!(defs[0].0, "1-esp.conf");
         assert_eq!(defs[1].0, "2-ingot_0.1.0.conf");
