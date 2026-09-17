@@ -34,3 +34,8 @@ ab:
 # Host-side unittest suite (no VM, seconds).
 test:
 	python3 -m unittest discover -s harness -p 'test_*.py' -v
+
+# Rust workspace tests (offline; the helper's fixtures are committed in
+# src/update-helper/tests/).
+rust-test:
+	cd src && cargo test

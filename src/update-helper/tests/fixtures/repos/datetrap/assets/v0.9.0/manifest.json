@@ -1,0 +1,29 @@
+{
+  "assets": [
+    {
+      "name": "ingot_0.9.0.root.erofs",
+      "sha256": "392c30d4cb1b33f429c3c5490f2eab82595c01e23e7593415ffde560d823287e"
+    },
+    {
+      "name": "ingot_0.9.0.efi",
+      "sha256": "5f36a6f8db0a7aff0a539b8a7b5b3f95d30960f74c96b99f09b46dce3e0d8ade"
+    },
+    {
+      "name": "SHA256SUMS",
+      "sha256": "2b0778a823290e3fa2b5320e5af8f397ffa8f9ac16f595211d5cb983d0eeff73"
+    },
+    {
+      "name": "SHA256SUMS.gpg",
+      "sha256": "89b5904193ccbbfadee05045c3bf9308e1bfa436a0e3fb349f8d6790e97152cb"
+    }
+  ],
+  "build": {
+    "compose": "Fedora-Rawhide-20260916.n.0",
+    "notes": "ingot-update-helper fixture",
+    "source_date_epoch": 1789516800
+  },
+  "image_version": "0.9.0",
+  "schema": 1,
+  "tag": "v0.9.0",
+  "version": "0.9.0"
+}
