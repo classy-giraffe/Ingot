@@ -70,17 +70,23 @@ pub(crate) fn is_block_device(path: &Path) -> bool {
 /// is exactly this big.
 fn file_disk_size(path: &Path, fmt: &str) -> Result<u64, String> {
     if fmt == "qcow2" {
-        let v: serde_json::Value = qemu_img_info(path)?
-            .parse()
-            .map_err(|_| "qemu-img info: bad JSON".to_string())?;
-        v.get("virtual-size")
-            .and_then(|x| x.as_u64())
-            .ok_or("qemu-img info: no virtual-size".to_string())
+        qemu_img_virtual_size(path)
     } else {
         fs::metadata(path)
             .map(|m| m.len())
             .map_err(|e| format!("target disk not accessible: {}: {e}", path.display()))
     }
+}
+
+/// The virtual size in bytes of a qcow2 disk, from `qemu-img info`
+/// (the working copy is exactly this big).
+pub(crate) fn qemu_img_virtual_size(path: &Path) -> Result<u64, String> {
+    let v: serde_json::Value = qemu_img_info(path)?
+        .parse()
+        .map_err(|_| "qemu-img info: bad JSON".to_string())?;
+    v.get("virtual-size")
+        .and_then(|x| x.as_u64())
+        .ok_or("qemu-img info: no virtual-size".to_string())
 }
 
 /// The working copy occupies the whole disk inside the work volume:

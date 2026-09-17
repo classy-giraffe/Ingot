@@ -19,7 +19,11 @@ pub struct Version {
 
 impl Default for Version {
     fn default() -> Self {
-        Version { major: 0, minor: 0, patch: 0 }
+        Version {
+            major: 0,
+            minor: 0,
+            patch: 0,
+        }
     }
 }
 

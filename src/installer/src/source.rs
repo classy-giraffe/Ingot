@@ -15,6 +15,7 @@
 //! next to an artifact, the artifact's checksum is verified.
 
 use crate::version::Version;
+use sha2::Digest;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -68,7 +69,6 @@ impl Artifact {
 
 /// SHA-256 of a file, lowercase hex.
 pub fn sha256_file(path: &Path) -> Result<String, String> {
-    use sha2::Digest;
     let mut h = sha2::Sha256::new();
     let mut f = fs::File::open(path).map_err(|e| e.to_string())?;
     let mut buf = [0u8; 65536];

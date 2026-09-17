@@ -67,14 +67,8 @@ fn disk_size(path: &Path) -> Result<(u64, String), String> {
             path.display()
         ));
     }
-    let fmt = crate::target::qemu_img_format(path)?;
-    let v: serde_json::Value = crate::target::qemu_img_info(path)?
-        .parse()
-        .map_err(|_| "qemu-img info: bad JSON".to_string())?;
-    let size = v
-        .get("virtual-size")
-        .and_then(|x| x.as_u64())
-        .ok_or("qemu-img info: no virtual-size")?;
+    let fmt = target::qemu_img_format(path)?;
+    let size = target::qemu_img_virtual_size(path)?;
     Ok((size, fmt))
 }
 
@@ -110,13 +104,8 @@ pub fn plan(cfg: Config) -> Result<Plan, String> {
     let bytes = fs::read(&uki.path)
         .map_err(|e| format!("cannot read UKI artifact {}: {e}", uki.path.display()))?;
     let version_str = cfg.version.to_string();
-    ukify::validate_uki(
-        &bytes,
-        &version_str,
-        layout::SLOT_A_UUID,
-        layout::VAR_UUID,
-    )
-    .map_err(|e| format!("UKI validation failed: {e}"))?;
+    ukify::validate_uki(&bytes, &version_str, layout::SLOT_A_UUID, layout::VAR_UUID)
+        .map_err(|e| format!("UKI validation failed: {e}"))?;
 
     Ok(Plan {
         cfg,

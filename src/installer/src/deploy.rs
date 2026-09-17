@@ -11,6 +11,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use sha2::Digest;
+
 use crate::log::InstallLog;
 use crate::source::Artifact;
 
@@ -44,7 +46,6 @@ fn place(what: &str, art: &Artifact, dev: &Path, log: &InstallLog) -> Result<(),
     )?;
 
     // Verification: hash the first art.size device bytes in-process.
-    use sha2::Digest;
     let mut h = sha2::Sha256::new();
     let mut f = fs::File::open(dev)
         .map_err(|e| format!("cannot re-open {} for verification: {e}", dev.display()))?;
