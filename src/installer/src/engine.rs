@@ -187,8 +187,13 @@ pub fn render_report(plan: &Plan) -> String {
         "System: hostname={} timezone={} locale={} keymap={}\n",
         plan.cfg.hostname, plan.cfg.timezone, plan.cfg.locale, plan.cfg.keymap
     ));
-    let users: Vec<String> = plan
-        .cfg
+    s.push_str(&system_lines(&plan.cfg));
+    s
+}
+
+/// The Users, SSH keys, and Services lines of the dry-run report.
+fn system_lines(cfg: &Config) -> String {
+    let users: Vec<String> = cfg
         .users
         .iter()
         .enumerate()
@@ -200,12 +205,13 @@ pub fn render_report(plan: &Plan) -> String {
             format!("{} (uid {}, {})", u.name, 1000 + i as u32, shell)
         })
         .collect();
+    let mut s = String::new();
     s.push_str(&format!("Users: {}\n", users.join(", ")));
     s.push_str(&format!(
         "SSH keys: {} authorized key(s)\n",
-        plan.cfg.ssh_keys.len()
+        cfg.ssh_keys.len()
     ));
-    s.push_str(&format!("Services: {}\n", plan.cfg.services.join(", ")));
+    s.push_str(&format!("Services: {}\n", cfg.services.join(", ")));
     s
 }
 
@@ -361,64 +367,13 @@ fn run_phases(
         .output();
 
     // 2. partition devices (slot B is looked up for the record only)
-    let mut parts: BTreeMap<&'static str, PathBuf> = BTreeMap::new();
-    for p in &plan.layout.partitions {
-        let dev = target.partition_by_uuid(p.part_uuid, 15)?;
-        log.log_result(
-            "repart",
-            "partition-ready",
-            Some(format!(
-                "{} -> {} ({} {})",
-                p.label,
-                dev.display(),
-                p.fs,
-                p.size
-            )),
-        )?;
-        match p.role {
-            layout::Role::Esp => {
-                parts.insert("esp.raw", dev);
-            }
-            layout::Role::SlotA => {
-                parts.insert("slot.raw", dev);
-            }
-            layout::Role::Var => {
-                parts.insert("var.raw", dev.clone());
-                *var_mount = Some(dev);
-            }
-            layout::Role::Home => {
-                parts.insert("home.raw", dev);
-            }
-            layout::Role::SlotB => {}
-        }
-    }
+    let parts = partition_devices(plan, target, log, var_mount)?;
 
     // 3. whole-image deployment
     deploy::deploy(&plan.artifacts, &parts, log)?;
 
     // 4. mounts for content initialization
-    // Look the filesystems up by role: the partition order is a
-    // layout.rs invariant, not something the engine re-encodes.
-    let fs_of = |role: layout::Role| -> &str {
-        plan.layout
-            .partitions
-            .iter()
-            .find(|p| p.role == role)
-            .expect("the layout always contains every role")
-            .fs
-            .as_str()
-    };
-    let var_fs = fs_of(layout::Role::Var);
-    let home_fs = fs_of(layout::Role::Home);
-    let var_dev = parts.get("var.raw").unwrap().clone();
-    let home_dev = parts.get("home.raw").unwrap().clone();
-    let esp_dev = parts.get("esp.raw").unwrap().clone();
-    let slot_dev = parts.get("slot.raw").unwrap().clone();
-    let var_m = target.mount(&var_dev, var_fs, work, "")?;
-    *var_mount = Some(var_m.clone());
-    let home_m = target.mount(&home_dev, home_fs, work, "")?;
-    let esp_m = target.mount(&esp_dev, "vfat", work, "")?;
-    let slot_m = target.mount(&slot_dev, "erofs", work, "ro")?;
+    let (var_m, home_m, esp_m, slot_m) = mount_for_init(plan, target, &parts, work, var_mount)?;
 
     // 5. /var/lib/etc from factory defaults + config
     etcinit::run(&plan.cfg, &var_m, &home_m, &slot_m, log)?;
@@ -450,6 +405,82 @@ fn run_phases(
         .map_err(|e| format!("cannot install over the target: {e}"))?;
     target.cleanup_work_file();
     Ok(())
+}
+
+/// Phase 2: look up the partition devices by their fixed PARTUUIDs
+/// (slot B is looked up for the record only) and log each one ready.
+fn partition_devices(
+    plan: &Plan,
+    target: &mut DiskTarget,
+    log: &InstallLog,
+    var_mount: &mut Option<PathBuf>,
+) -> Result<BTreeMap<&'static str, PathBuf>, String> {
+    let mut parts: BTreeMap<&'static str, PathBuf> = BTreeMap::new();
+    for p in &plan.layout.partitions {
+        let dev = target.partition_by_uuid(p.part_uuid, 15)?;
+        log.log_result(
+            "repart",
+            "partition-ready",
+            Some(format!(
+                "{} -> {} ({} {})",
+                p.label,
+                dev.display(),
+                p.fs,
+                p.size
+            )),
+        )?;
+        match p.role {
+            layout::Role::Esp => {
+                parts.insert("esp.raw", dev);
+            }
+            layout::Role::SlotA => {
+                parts.insert("slot.raw", dev);
+            }
+            layout::Role::Var => {
+                parts.insert("var.raw", dev.clone());
+                *var_mount = Some(dev);
+            }
+            layout::Role::Home => {
+                parts.insert("home.raw", dev);
+            }
+            layout::Role::SlotB => {}
+        }
+    }
+    Ok(parts)
+}
+
+/// Phase 4: mount the partitions for content initialization: /var and
+/// /home read-write, the ESP read-write, the active slot read-only.
+fn mount_for_init(
+    plan: &Plan,
+    target: &mut DiskTarget,
+    parts: &BTreeMap<&'static str, PathBuf>,
+    work: &Path,
+    var_mount: &mut Option<PathBuf>,
+) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf), String> {
+    // Look the filesystems up by role: the partition order is a
+    // layout.rs invariant, not something the engine re-encodes.
+    let fs_of = |role: layout::Role| -> &str {
+        plan.layout
+            .partitions
+            .iter()
+            .find(|p| p.role == role)
+            .expect("the layout always contains every role")
+            .fs
+            .as_str()
+    };
+    let var_fs = fs_of(layout::Role::Var);
+    let home_fs = fs_of(layout::Role::Home);
+    let var_dev = parts.get("var.raw").unwrap().clone();
+    let home_dev = parts.get("home.raw").unwrap().clone();
+    let esp_dev = parts.get("esp.raw").unwrap().clone();
+    let slot_dev = parts.get("slot.raw").unwrap().clone();
+    let var_m = target.mount(&var_dev, var_fs, work, "")?;
+    *var_mount = Some(var_m.clone());
+    let home_m = target.mount(&home_dev, home_fs, work, "")?;
+    let esp_m = target.mount(&esp_dev, "vfat", work, "")?;
+    let slot_m = target.mount(&slot_dev, "erofs", work, "ro")?;
+    Ok((var_m, home_m, esp_m, slot_m))
 }
 
 #[cfg(test)]

@@ -118,7 +118,14 @@ pub fn run(
     if !etc.is_dir() {
         seed_factory(var, slot, log)?;
     }
+    identity(cfg, &etc, slot, log)?;
+    accounts(cfg, &etc, home, slot, log)?;
+    services(cfg, &etc, slot, log)?;
+    Ok(())
+}
 
+/// System identity: hostname, localtime, locale, keymap.
+fn identity(cfg: &Config, etc: &Path, slot: &Path, log: &InstallLog) -> Result<(), String> {
     // --- system identity -------------------------------------------------
     fs::write(etc.join("hostname"), format!("{}\n", cfg.hostname))
         .map_err(|e| format!("cannot write hostname: {e}"))?;
@@ -153,7 +160,18 @@ pub fn run(
         "locale-keymap",
         Some(format!("{} / {}", cfg.locale, cfg.keymap)),
     )?;
+    Ok(())
+}
 
+/// Initial users: account entries, home directories, SSH keys, and the
+/// account-file permissions they settle on.
+fn accounts(
+    cfg: &Config,
+    etc: &Path,
+    home: &Path,
+    slot: &Path,
+    log: &InstallLog,
+) -> Result<(), String> {
     // --- users ------------------------------------------------------------
     // uids start at 1000 (spec: the first user is the administrator).
     let mut uid = 1000u32;
@@ -234,7 +252,12 @@ pub fn run(
                 .map_err(|e| format!("cannot set permissions on /var/lib/etc/{file}: {e}"))?;
         }
     }
+    Ok(())
+}
 
+/// Service enablement policy (11.4.11): enable the units the release
+/// ships; a unit not shipped is logged and skipped, not a failure.
+fn services(cfg: &Config, etc: &Path, slot: &Path, log: &InstallLog) -> Result<(), String> {
     // --- services ---------------------------------------------------------
     let wants = etc.join("systemd/system/multi-user.target.wants");
     for unit in &cfg.services {
@@ -260,7 +283,5 @@ pub fn run(
             .map_err(|e| format!("cannot enable {unit}: {e}"))?;
         log.log_result("etcinit", "service-enabled", Some(unit.clone()))?;
     }
-
     Ok(())
 }
-
