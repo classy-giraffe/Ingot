@@ -67,13 +67,20 @@ pub fn parse_sections(bytes: &mut [u8]) -> Result<UkiSections, String> {
             return Err(format!("section {name} raw data out of bounds"));
         }
         let data = &bytes[raw_ptr..raw_ptr + raw_size];
-        let text = strip_trailing_nul(data);
-        let text = std::str::from_utf8(text)
-            .map_err(|_| format!("section {name} is not valid UTF-8"))?
-            .to_string();
         match name.as_str() {
-            ".cmdline" if cmdline.is_none() => cmdline = Some(text),
-            ".osrel" if osrel.is_none() => osrel = Some(text),
+            ".cmdline" | ".osrel" => {
+                let text = strip_trailing_nul(data);
+                let text = std::str::from_utf8(text)
+                    .map_err(|_| format!("section {name} is not valid UTF-8"))?
+                    .to_string();
+                match name.as_str() {
+                    ".cmdline" if cmdline.is_none() => cmdline = Some(text),
+                    ".osrel" if osrel.is_none() => osrel = Some(text),
+                    _ => {}
+                }
+            }
+            // Other sections (kernel, initrd, .rodata) are binary;
+            // only their bounds are validated.
             _ => {}
         }
     }
