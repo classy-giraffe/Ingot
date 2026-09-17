@@ -1,0 +1,16 @@
+[package]
+name = "ingot-installer"
+description = "Ingot declarative installer engine: TOML config in, A/B Ingot disk out (spec 11)"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ingot-installer"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+sha2 = { workspace = true }
