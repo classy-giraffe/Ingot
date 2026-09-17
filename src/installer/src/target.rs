@@ -16,6 +16,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::size::human;
+
 /// A prepared target: the original path plus the device the engine
 /// operates on.
 #[derive(Debug)]
@@ -61,6 +63,49 @@ fn is_block_device(path: &Path) -> bool {
         Some(name) => Path::new("/sys/block").join(name).is_dir(),
         None => false,
     }
+}
+
+/// The size in bytes of the disk a file target represents: the
+/// virtual size for qcow2, the file size for raw. The working copy
+/// is exactly this big.
+fn file_disk_size(path: &Path, fmt: &str) -> Result<u64, String> {
+    if fmt == "qcow2" {
+        let v: serde_json::Value = qemu_img_info(path)?
+            .parse()
+            .map_err(|_| "qemu-img info: bad JSON".to_string())?;
+        v.get("virtual-size")
+            .and_then(|x| x.as_u64())
+            .ok_or("qemu-img info: no virtual-size".to_string())
+    } else {
+        fs::metadata(path)
+            .map(|m| m.len())
+            .map_err(|e| format!("target disk not accessible: {}: {e}", path.display()))
+    }
+}
+
+/// The working copy occupies the whole disk inside the work volume:
+/// verify the volume can hold it before any byte is written (a tmpfs
+/// working directory can be smaller than the disk). `df` reports the
+/// free space of the volume `work` lives on, in bytes.
+fn work_capacity(work: &Path, needed: u64) -> Result<(), String> {
+    let out = run("df", &["-P", "-B", "1", &work.to_string_lossy()])
+        .map_err(|e| format!("cannot probe working directory capacity: {e}"))?;
+    let avail = out
+        .lines()
+        .last()
+        .and_then(|l| l.split_whitespace().nth(3))
+        .and_then(|n| n.parse::<u128>().ok())
+        .ok_or("cannot determine free space in the working directory (bad df output)")?;
+    if avail < u128::from(needed) {
+        return Err(format!(
+            "working directory {} has {} available; the working copy of this {} disk needs {} free (pass --work on a larger volume)",
+            work.display(),
+            human(u64::try_from(avail).unwrap_or(u64::MAX)),
+            human(needed),
+            human(needed)
+        ));
+    }
+    Ok(())
 }
 
 /// Reads the PARTUUID of a block device with `blkid -p` (direct
@@ -116,6 +161,11 @@ impl DiskTarget {
         }
 
         let fmt = qemu_img_format(original)?;
+        // The working copy is the whole disk: the work volume must
+        // hold it before the first write. A tmpfs working directory
+        // can be smaller than the disk - failing here is a
+        // diagnostic; failing mid-write is an EIO.
+        work_capacity(work, file_disk_size(original, &fmt)?)?;
         let work_file = work.join("target.raw");
         if fmt == "qcow2" {
             run(
@@ -337,4 +387,20 @@ pub fn qemu_img_format(path: &Path) -> Result<String, String> {
         .and_then(|x| x.as_str())
         .map(String::from)
         .ok_or("qemu-img info: no format".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn work_capacity_ok_and_too_small() {
+        let dir = std::env::temp_dir().join("ingot-target-cap-test");
+        fs::create_dir_all(&dir).unwrap();
+        assert!(work_capacity(&dir, 1).is_ok());
+        let err = work_capacity(&dir, u64::MAX).unwrap_err();
+        assert!(err.contains("working directory"), "{err}");
+        assert!(err.contains("--work"), "{err}");
+        let _ = fs::remove_dir(&dir);
+    }
 }
