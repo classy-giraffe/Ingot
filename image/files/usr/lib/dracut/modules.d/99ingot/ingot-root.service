@@ -1,0 +1,20 @@
+# Ingot runtime-root preparation (initramfs).
+#
+# Runs after the stock initramfs has mounted the state partition at
+# /sysroot (root=PARTUUID=... -> generated sysroot.mount) and before
+# the stock initrd-cleanup.service that isolates the switch-root
+# target, so the runtime root is fully prepared before switch_root.
+[Unit]
+Description=Ingot runtime root (tmpfs / with slot /usr and state /var)
+DefaultDependencies=no
+ConditionKernelCommandLine=usr
+Requires=sysroot.mount
+After=sysroot.mount initrd-root-fs.target dracut-pre-pivot.service
+Before=initrd-cleanup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/ingot/prepare-root.sh
+
+[Install]
+WantedBy=initrd.target

@@ -1,0 +1,80 @@
+#!/bin/sh
+# Main image prepare script. Runs in two phases:
+#   - arg "final": after OS package install (no build overlay): fetch the
+#     pinned brush source into the artifacts directory (consumed by the
+#     build script; not part of the image payload) and set the machine
+#     identity in the image root.
+#   - arg "build": no-op: the brush cargo build runs in the build script
+#     (chroot), which sees both the build-overlay toolchain (cargo, gcc)
+#     and the pinned source staged by the final phase.
+#
+# Host-side script (no .chroot): network + host tools available.
+# $BUILDROOT is the image root; $ARTIFACTDIR is a per-image scratch
+# directory that never ends up in the image. $BRUSH_SHA is passed via
+# [Content] Environment= (checked against tools/pins.json by
+# tools/check-pins.py).
+set -eu
+
+# mkosi sanitizes the environment for host-side scripts; make the rustup
+# toolchain (cargo) and common tool locations visible. The build may run
+# as root (tools/ingot-build sudo wrapper, HOME=/root without a
+# toolchain), so also fall back to the host user's rustup install.
+PATH="${HOME}/.cargo/bin:/home/tommy/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
+export PATH
+
+[ "$#" -eq 1 ] || { echo "usage: mkosi.prepare <final|build>" >&2; exit 1; }
+phase=$1
+
+case "$phase" in
+final)
+    # --- pinned brush source into the artifacts dir (not the payload) ---
+    : "${BRUSH_SHA:?BRUSH_SHA must be set (image/mkosi.conf)}"
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    curl -fL --retry 3 "https://github.com/reubeno/brush/archive/${BRUSH_SHA}.tar.gz" \
+        -o "$work/brush.tar.gz"
+    tar -C "$work" -xzf "$work/brush.tar.gz"
+    # github tarballs: <name>-<shortsha>/ for a SHA commit download
+    src=$(find "$work" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+    [ -n "$src" ] || { echo "brush source tree not found" >&2; exit 1; }
+    [ -f "$src/Cargo.toml" ] || { echo "brush source has no Cargo.toml" >&2; exit 1; }
+    rm -rf "$ARTIFACTDIR/brush-source"
+    cp -a "$src" "$ARTIFACTDIR/brush-source"
+    echo "ingot: brush source ${BRUSH_SHA} staged at /work/artifacts/brush-source" >&2
+
+    # --- machine identity (overrides the distro os-release; mkosi appends
+    #     IMAGE_ID/IMAGE_VERSION to it later) ---
+    cat > "$BUILDROOT/usr/lib/os-release" <<'EOF'
+NAME="Ingot"
+VERSION="0.1.0 (workstation)"
+ID=ingot
+ID_LIKE=fedora
+PRETTY_NAME="Ingot 0.1.0"
+VERSION_ID="0.1.0"
+VARIANT=workstation
+VARIANT_ID=workstation
+HOME_URL="https://github.com/classy-giraffe/Ingot"
+EOF
+    ;;
+
+build)
+    # Prime the cargo registry (index + crate sources) for the pinned
+    # brush build, using the image's own toolchain (build overlay) with
+    # network access (prepare scripts always run with network). The
+    # cache lands in the artifacts dir, which the build script (chroot,
+    # no network by default) reuses with --offline: the build itself is
+    # hermetic - pinned compose, pinned source, pinned crate versions
+    # (Cargo.lock, --locked/--offline).
+    : "${BRUSH_SHA:?BRUSH_SHA must be set (image/mkosi.conf)}"
+    [ -d "$ARTIFACTDIR/brush-source" ] \
+        || { echo "build: brush source missing (run the final phase first)" >&2; exit 1; }
+    mkosi-chroot env CARGO_HOME=/work/artifacts/cargo-home HOME=/ \
+        cargo fetch --locked --manifest-path /work/artifacts/brush-source/Cargo.toml
+    echo "ingot: cargo registry primed at /work/artifacts/cargo-home" >&2
+    ;;
+
+*)
+    echo "mkosi.prepare: unknown phase '$phase'" >&2
+    exit 1
+    ;;
+esac

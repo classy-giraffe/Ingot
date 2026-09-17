@@ -1,0 +1,9 @@
+# Ingot preset policy (systemd.preset(5)).
+#
+# On first boot, systemd applies the preset policy to all vendor units
+# (systemd[1] journal: "Applying preset policy"). The built-in
+# catch-all (99-default-disable.preset: "disable *") disables every unit
+# not explicitly listed, so enablement symlinks of Ingot's own units are
+# removed on the first boot unless listed here. This file sorts before
+# the catch-all; the first matching preset line wins.
+enable ingot-harness-probe.service

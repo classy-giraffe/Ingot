@@ -1,0 +1,14 @@
+[Unit]
+Description=Harness boot probe (machine-readable results)
+Documentation=man:ingot(7)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+ExecStart=/bin/sh /usr/lib/ingot/harness-probe.sh
+
+[Install]
+WantedBy=multi-user.target

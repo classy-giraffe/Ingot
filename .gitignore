@@ -1,0 +1,7 @@
+# build artifacts
+dist/
+image/mkosi.conf.d/
+
+# python
+__pycache__/
+*.pyc

@@ -1,0 +1,31 @@
+{
+  "qemu": {
+    "version": "10.2.1"
+  },
+  "ovmf": {
+    "code": {
+      "path": "/usr/share/OVMF/OVMF_CODE_4M.snakeoil.fd",
+      "sha256": "9c0155a4ab5ae5cd53d743f6ce8e50d228704020f188412d81e97953bd95776f"
+    },
+    "vars": {
+      "path": "/usr/share/OVMF/OVMF_VARS_4M.snakeoil.fd",
+      "sha256": "a6b8fface5ce0b5e945717036b0044a5bf4cd89b5ce7468fbd7c971dd0bd20e9"
+    }
+  },
+  "keys": {
+    "key": {
+      "path": "tools/keys/snakeoil.key",
+      "sha256": "17867d0e5118198a3db9bb6e7393f061e464e1a2458b8ea40516f0c422b23f0e"
+    },
+    "cert": {
+      "path": "tools/keys/snakeoil.pem",
+      "sha256": "d1ead44fc7748b8c26e0cba2141b0b54a379c0f11c4e593fbc5d7dd995f90265"
+    }
+  },
+  "host_tools": {
+    "mkosi": "26",
+    "erofs-utils": "1.9",
+    "btrfs-progs": "6.17.1",
+    "dosfstools": "4.2"
+  }
+}

@@ -1,0 +1,49 @@
+#!/bin/sh
+# Main image postinst script (chroot variant: runs inside the image, so
+# the image's own dracut, kernel modules, and the 99ingot dracut module
+# are what build the initramfs).
+#
+# It must run as a postinst script, not a build script: mkosi copies
+# ExtraTrees=files into the image root AFTER the build scripts (order:
+# build scripts -> build dest -> extra trees -> postinst), so only in the
+# postinst phase is the 99ingot dracut module (erofs + btrfs modules,
+# runtime-root preparation) present when dracut runs.
+#
+# The non-hostonly initramfs is staged into the artifacts directory's
+# io.mkosi.initrd subdirectory ($ARTIFACTDIR): mkosi's finalize_initrds
+# picks up every file there and embeds them in the UKI's .initrd section
+# (the same mechanism the microcode cpio uses for .ucode). The --initrd
+# passed by tools/build.sh is an empty-cpio placeholder that exists
+# purely so mkosi's up-front initrd check passes and the stock
+# default-initrd subimage stays out of the UKI; the real initramfs is
+# this file.
+set -eu
+
+# The postinst chroot sees the final image root (packages and
+# ExtraTrees already in place) and the sandbox /work tree: $CHROOT_OUTPUTDIR
+# is the staging directory, $ARTIFACTDIR the artifacts directory.
+
+# Determine the installed kernel version: prefer /boot/kernel-release,
+# fall back to the modules directory (kernel-modules installs it).
+kv=$(cat /boot/kernel-release 2>/dev/null || true)
+kv=$(basename "$kv" | sed -n 's/^vmlinuz-\(.*\)$/\1/p')
+[ -n "$kv" ] || kv=$(ls /usr/lib/modules 2>/dev/null | head -n 1)
+[ -n "$kv" ] || { echo "postinst: no kernel version found in the image" >&2; exit 1; }
+echo "ingot: kernel $kv" >&2
+
+# rawhide ships the AMD microcode as container files under
+# /usr/lib/firmware/amd-ucode/ (a README.xz alongside); mkosi's
+# microcode builder concatenates every file in that directory into the
+# .ucode container stream - the README is not a container.
+rm -f /usr/lib/firmware/amd-ucode/README.xz
+
+# The initramfs root must contain a POSIX shell: dracut's shell-interpreter
+# module resolves /bin/sh to the first of bash dash busybox present in the
+# initramfs. brush is the /bin/sh of the runtime root, not of the initramfs,
+# and has no dracut module - without a shell module dracut falls back to
+# resolving /bin/sh, which is not a dracut module and fails the build. bash
+# is packaged into the image (Packages=), so force its module in.
+mkdir -p "$ARTIFACTDIR/io.mkosi.initrd"
+dracut --force --no-hostonly --add bash --kver "$kv" \
+    "$ARTIFACTDIR/io.mkosi.initrd/ingot-0.1.0.initrd"
+echo "ingot: initramfs staged at $ARTIFACTDIR/io.mkosi.initrd/ingot-0.1.0.initrd" >&2
