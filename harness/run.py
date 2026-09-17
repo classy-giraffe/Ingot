@@ -162,7 +162,7 @@ def boot_disk(disk, workdir, ovmf, timeout=420, mode="probe", marker=None):
         "probe": console.extract_probe_frame(text),
         "cmdline": console.kernel_cmdline(text),
         "secure_boot": console.secure_boot_enabled(text),
-        "reached_multi_user": console.reached_target(text, "Multi-User System"),
+        "reached_multi_user": console.reached_target(text, "multi-user.target"),
         "runtime_root_prepared": console.runtime_root_prepared(text),
         "failure_markers": console.failure_markers(text),
         "outcome": outcome,
