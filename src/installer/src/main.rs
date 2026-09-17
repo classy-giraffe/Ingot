@@ -7,6 +7,7 @@
 //! reports the plan without touching the disk.
 
 mod config;
+mod layout;
 mod size;
 mod sshkey;
 mod version;
