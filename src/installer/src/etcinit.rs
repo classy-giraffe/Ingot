@@ -1,8 +1,11 @@
 //! /var/lib/etc initialization (spec 9.3, 11.4.3-5, .9, .10, .11).
 //!
-//! The /var artifact already carries the factory defaults
-//! (`/var/lib/etc` = the factory `/etc` skeleton, spec 9.3). This
-//! phase overlays the install config onto it:
+//! The deployed /var partition starts empty: the factory defaults
+//! live in the slot at `share/factory/etc` (spec 9.3), and first
+//! boot initializes `/etc` from them if empty. The installer does
+//! that non-interactively - it seeds `/var/lib/etc` from the slot's
+//! factory defaults (skipped when the /var partition already carries
+//! state) and then overlays the install config onto it:
 //!
 //! - `hostname`, `localtime` (symlink into the slot's tzdata),
 //!   `locale.conf`, `vconsole.conf`
@@ -84,6 +87,61 @@ fn make_home(home_root: &Path, user: &str, uid: u32, gid: u32) -> Result<PathBuf
     Ok(dir)
 }
 
+/// Recursively copies `src` into `dst` (directories, files, symlinks),
+/// preserving permissions. Existing files in `dst` are never
+/// overwritten.
+fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
+    let meta =
+        fs::symlink_metadata(src).map_err(|e| format!("cannot read {}: {e}", src.display()))?;
+    if meta.file_type().is_symlink() {
+        let target = fs::read_link(src).map_err(|e| e.to_string())?;
+        fs::create_dir_all(dst.parent().unwrap_or(dst)).map_err(|e| e.to_string())?;
+        let _ = fs::remove_file(dst);
+        std::os::unix::fs::symlink(target, dst)
+            .map_err(|e| format!("cannot symlink {}: {e}", dst.display()))
+    } else if meta.is_dir() {
+        fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+        for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            copy_tree(entry.path().as_path(), &dst.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        fs::create_dir_all(dst.parent().unwrap_or(dst)).map_err(|e| e.to_string())?;
+        if dst.exists() {
+            return Ok(());
+        }
+        fs::copy(src, dst)
+            .map_err(|e| format!("cannot copy {} -> {}: {e}", src.display(), dst.display()))?;
+        fs::set_permissions(dst, fs::Permissions::from_mode(meta.permissions().mode()))
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Seeds an empty /var/lib/etc from the slot's factory defaults
+/// (spec 9.3: factory defaults in the payload, first boot initializes
+/// /etc from them if empty).
+fn seed_factory(var: &Path, slot: &Path, log: &InstallLog) -> Result<(), String> {
+    let factory = slot.join("share/factory/etc");
+    if !factory.is_dir() {
+        return Err(format!(
+            "factory defaults missing from the installed release ({}): cannot initialize /var/lib/etc",
+            factory.display()
+        ));
+    }
+    let etc = var.join("lib/etc");
+    copy_tree(&factory, &etc)
+        .map_err(|e| format!("cannot seed /var/lib/etc from the factory defaults: {e}"))?;
+    log.log_result(
+        "etcinit",
+        "factory-seeded",
+        Some(format!(
+            "/var/lib/<redacted> seeded from /usr/share/factory/etc"
+        )),
+    )
+    .map_err(|e| e)
+}
+
 /// Initializes /var/lib/etc and the home directories from the
 /// factory state plus the install config.
 ///
@@ -99,10 +157,7 @@ pub fn run(
 ) -> Result<(), String> {
     let etc = var.join("lib/etc");
     if !etc.is_dir() {
-        return Err(format!(
-            "/var/lib/etc is missing on the deployed /var partition ({}): the factory state is corrupt",
-            var.display()
-        ));
+        seed_factory(var, slot, log)?;
     }
 
     // --- system identity -------------------------------------------------
@@ -110,7 +165,7 @@ pub fn run(
         .map_err(|e| format!("cannot write hostname: {e}"))?;
     log.log_result("etcinit", "hostname", Some(cfg.hostname.clone()))?;
 
-    let tz_path = slot.join(format!("usr/share/zoneinfo/{}", cfg.timezone));
+    let tz_path = slot.join(format!("share/zoneinfo/{}", cfg.timezone));
     if !tz_path.is_file() {
         return Err(format!(
             "timezone {0:?} not found in the installed release (expected {1})",
@@ -146,10 +201,13 @@ pub fn run(
             .shell
             .clone()
             .unwrap_or_else(|| crate::config::DEFAULT_SHELL.to_string());
-        if !slot
-            .join(shell.strip_prefix('/').unwrap_or(&shell))
-            .is_file()
-        {
+        // The slot partition root is the /usr tree: a runtime
+        // /usr/bin/shell is bin/shell inside the slot.
+        let slot_shell = shell
+            .trim_start_matches('/')
+            .strip_prefix("usr/")
+            .unwrap_or_else(|| shell.trim_start_matches('/'));
+        if !slot.join(slot_shell).is_file() {
             return Err(format!(
                 "shell {shell} does not exist in the installed release"
             ));
@@ -206,7 +264,7 @@ pub fn run(
     let wants = etc.join("systemd/system/multi-user.target.wants");
     for unit in &cfg.services {
         check_unit_name(unit)?;
-        let shipped = slot.join(format!("usr/lib/systemd/system/{unit}"));
+        let shipped = slot.join(format!("lib/systemd/system/{unit}"));
         if !shipped.is_file() {
             log.log_result(
                 "etcinit",

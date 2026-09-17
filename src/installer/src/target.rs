@@ -63,6 +63,31 @@ fn is_block_device(path: &Path) -> bool {
     }
 }
 
+/// Reads the PARTUUID of a block device with `blkid -p` (direct
+/// probe, bypassing any cache). Returns None when the device has no
+/// partition table metadata.
+///
+/// In probe mode blkid reports the GPT partition GUID as
+/// `PART_ENTRY_UUID` (the `PARTUUID` token is the cache-mode spelling).
+fn blkid_partuuid(dev: &str) -> Option<String> {
+    let out = Command::new("blkid").args(["-p", dev]).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    // Line shape: /dev/loop8p1: PART_ENTRY_SCHEME="gpt" ...
+    //             PART_ENTRY_UUID="..." ...
+    let line = text.lines().next()?;
+    for key in ["PART_ENTRY_UUID=\"", "PARTUUID=\""] {
+        if let Some(field) = line.split_whitespace().find(|f| f.starts_with(key)) {
+            return Some(
+                field
+                    .trim_start_matches(key)
+                    .trim_end_matches('"')
+                    .to_string(),
+            );
+        }
+    }
+    None
+}
+
 impl DiskTarget {
     /// Detects the target kind and prepares the working file.
     pub fn prepare(original: &Path, work: &Path) -> Result<Self, String> {
@@ -134,12 +159,20 @@ impl DiskTarget {
         }
     }
 
+    /// The device repart/dd/partprobe operate on: the loop device
+    /// after attach_loop, or the block device itself.
+    pub fn active_device(&self) -> &Path {
+        self.loop_dev.as_deref().unwrap_or(&self.disk)
+    }
+
     /// Attaches the working file to a free loop device.
     pub fn attach_loop(&mut self) -> Result<(), String> {
         let Some(f) = &self.work_file else {
             return Ok(());
         };
-        let dev = run("losetup", &["-f", "--show", &f.to_string_lossy()])
+        // -P: partscan, so the kernel picks up the GPT repart wrote
+        // before the attach.
+        let dev = run("losetup", &["-f", "-P", "--show", &f.to_string_lossy()])
             .map_err(|e| format!("losetup failed: {e}"))?;
         self.loop_dev = Some(PathBuf::from(&dev));
         Ok(())
@@ -148,18 +181,23 @@ impl DiskTarget {
     /// The sysfs block name of the device under `disk` (`loop3` for
     /// `/dev/loop3`, the device basename for block devices).
     fn sysfs_name(&self) -> String {
-        self.disk
+        self.active_device()
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default()
     }
 
     /// Finds the partition device whose PARTUUID matches `uuid`,
-    /// polling sysfs for up to `timeout` seconds (the kernel rescans
-    /// the GPT asynchronously after repart).
+    /// polling for up to `timeout` seconds.
+    ///
+    /// PARTUUID is read with `blkid -p` (direct probe, no cache): the
+    /// kernel does not expose the `partuuid` sysfs attribute for
+    /// loop-device partitions, so blkid is the only source that works
+    /// for both loop and block-device targets.
     pub fn partition_by_uuid(&self, uuid: &str, timeout_secs: u64) -> Result<PathBuf, String> {
         let name = self.sysfs_name();
         let base = format!("/sys/block/{name}");
+        let prefix = format!("{name}p");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
         loop {
             let entries = match fs::read_dir(&base) {
@@ -173,12 +211,12 @@ impl DiskTarget {
             };
             for e in entries.flatten() {
                 let n = e.file_name().to_string_lossy().to_string();
-                if !n.starts_with(&format!("{name}p")) {
+                if !n.starts_with(&prefix) {
                     continue;
                 }
-                let puuid = fs::read_to_string(e.path().join("partuuid")).ok();
-                if puuid.as_deref().map(|s| s.trim() == uuid).unwrap_or(false) {
-                    return Ok(PathBuf::from(format!("/dev/{n}")));
+                let dev = format!("/dev/{n}");
+                if blkid_partuuid(&dev).as_deref() == Some(uuid) {
+                    return Ok(PathBuf::from(dev));
                 }
             }
             if std::time::Instant::now() > deadline {

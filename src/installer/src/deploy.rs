@@ -21,7 +21,13 @@ fn place(what: &str, art: &Artifact, dev: &Path, log: &InstallLog) -> Result<(),
     let d = dev.to_string_lossy().to_string();
     let a = art.path.to_string_lossy().to_string();
     let out = Command::new("dd")
-        .args(["if", &a, "of", &d, "bs=4M", "conv=fsync", "status=none"])
+        .args([
+            &format!("if={a}"),
+            &format!("of={d}"),
+            "bs=4M",
+            "conv=fsync",
+            "status=none",
+        ])
         .output()
         .map_err(|e| format!("cannot run dd: {e}"))?;
     if !out.status.success() {

@@ -292,14 +292,31 @@ fn run_phases(
 ) -> Result<(), String> {
     let v = &plan.cfg.version;
 
-    // 1. loop attach + repart
-    target.attach_loop()?;
+    // 1. repart the working disk, then loop-attach with partscan so
+    //    the kernel sees the fresh GPT immediately
     repart::run(&plan.layout, &work.join("defs"), target, log)?;
+    target.attach_loop()?;
+    // Block-device targets need an explicit rescan (loop devices pick
+    // up the GPT at attach via -P; partprobe is a no-op for them).
+    let _ = std::process::Command::new("partprobe")
+        .arg(target.active_device())
+        .output();
 
     // 2. partition devices (slot B is looked up for the record only)
     let mut parts: BTreeMap<&'static str, PathBuf> = BTreeMap::new();
     for p in &plan.layout.partitions {
         let dev = target.partition_by_uuid(p.part_uuid, 15)?;
+        log.log_result(
+            "repart",
+            "partition-ready",
+            Some(format!(
+                "{} -> {} ({} {})",
+                p.label,
+                dev.display(),
+                p.fs,
+                p.size
+            )),
+        )?;
         match p.role {
             layout::Role::Esp => {
                 parts.insert("esp.raw", dev);
@@ -486,7 +503,7 @@ enabled = ["sshd.service"]
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let disk = dir.join("target.raw");
-        let mut f = fs::File::create(&disk).unwrap();
+        let f = fs::File::create(&disk).unwrap();
         f.set_len(30 * (1 << 30)).unwrap();
         drop(f);
 

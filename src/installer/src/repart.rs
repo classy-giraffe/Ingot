@@ -39,10 +39,20 @@ pub fn run(
         )),
     )?;
 
-    let disk = target.disk.to_string_lossy().to_string();
+    let disk = target.active_device().to_string_lossy().to_string();
     let defs = defs_dir.to_string_lossy().to_string();
+    // The device is attached and zero-filled (fresh install):
+    // require writes the fresh GPT on the empty disk and fails if a
+    // partition table is already there (never overwrite silently).
     let out = std::process::Command::new("systemd-repart")
-        .args(["--definitions", &defs, "--empty=create", "--", &disk])
+        .args([
+            "--definitions",
+            &defs,
+            "--empty=require",
+            "--dry-run=no",
+            "--",
+            &disk,
+        ])
         .output()
         .map_err(|e| format!("cannot run systemd-repart: {e}"))?;
     if !out.status.success() {
@@ -53,27 +63,5 @@ pub fn run(
         ));
     }
     log.log_result("repart", "repart-done", None)?;
-
-    // Ask the kernel to rescan the GPT (best-effort: loop devices
-    // usually rescan on their own; partprobe is the explicit nudge).
-    let _ = std::process::Command::new("partprobe").arg(&disk).output();
-
-    // Wait until every partition is visible in sysfs.
-    for p in &layout.partitions {
-        let dev = target
-            .partition_by_uuid(p.part_uuid, 10)
-            .map_err(|e| format!("repart did not produce {}: {e}", p.label))?;
-        log.log_result(
-            "repart",
-            "partition-ready",
-            Some(format!(
-                "{} -> {} ({} {})",
-                p.label,
-                dev.display(),
-                p.fs,
-                p.size
-            )),
-        )?;
-    }
     Ok(())
 }
