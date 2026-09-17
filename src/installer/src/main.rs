@@ -10,6 +10,7 @@ mod config;
 mod layout;
 mod size;
 mod sshkey;
+mod ukify;
 mod version;
 
 fn main() -> std::process::ExitCode {
