@@ -97,9 +97,7 @@ fn seed_factory(var: &Path, slot: &Path, log: &InstallLog) -> Result<(), String>
     log.log_result(
         "etcinit",
         "factory-seeded",
-        Some(format!(
-            "/var/lib/<redacted> seeded from /usr/share/factory/etc"
-        )),
+        Some(format!("/var/lib/etc seeded from /usr/share/factory/etc")),
     )
 }
 
