@@ -37,13 +37,30 @@ echo "ingot: kernel $kv" >&2
 # .ucode container stream - the README is not a container.
 rm -f /usr/lib/firmware/amd-ucode/README.xz
 
+# --- D-Bus vendor enablement (baked first-boot preset wiring) ---
+# On a fresh (uninitialized machine-id) first boot systemd applies the
+# preset and creates /etc/systemd/system/dbus.service ->
+# dbus-broker.service (dbus-broker's [Install] Alias) plus
+# /etc/systemd/system/sockets.target.wants/dbus.socket. Harness scenario
+# disks seed the machine-id to skip the first-boot flow, so that wiring
+# never materializes: dbus.socket (Service=dbus.service) cannot load its
+# target and systemd-logind, which needs the system bus, fails in
+# cascade. The image's /etc is hidden at boot under the /var/lib/etc
+# bind, so the enablement must be vendor enablement in /usr; systemd
+# honors /usr/lib/systemd/system unit directories the same way.
+ln -s dbus-broker.service /usr/lib/systemd/system/dbus.service
+mkdir -p /usr/lib/systemd/system/sockets.target.wants
+ln -s ../dbus.socket /usr/lib/systemd/system/sockets.target.wants/dbus.socket
+
 # The initramfs root must contain a POSIX shell: dracut's shell-interpreter
 # module resolves /bin/sh to the first of bash dash busybox present in the
 # initramfs. brush is the /bin/sh of the runtime root, not of the initramfs,
 # and has no dracut module - without a shell module dracut falls back to
 # resolving /bin/sh, which is not a dracut module and fails the build. bash
 # is packaged into the image (Packages=), so force its module in.
+# The staged initrd is named after the built version (tools/build.sh
+# exports INITRD_NAME via the per-build conf.d drop-in).
 mkdir -p "$ARTIFACTDIR/io.mkosi.initrd"
 dracut --force --no-hostonly --add bash --kver "$kv" \
-    "$ARTIFACTDIR/io.mkosi.initrd/ingot-0.1.0.initrd"
-echo "ingot: initramfs staged at $ARTIFACTDIR/io.mkosi.initrd/ingot-0.1.0.initrd" >&2
+    "$ARTIFACTDIR/io.mkosi.initrd/${INITRD_NAME:-ingot-0.1.0.initrd}"
+echo "ingot: initramfs staged at $ARTIFACTDIR/io.mkosi.initrd/${INITRD_NAME:-ingot-0.1.0.initrd}" >&2

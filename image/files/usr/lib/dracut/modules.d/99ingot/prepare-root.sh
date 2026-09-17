@@ -77,14 +77,15 @@ mount -t "$usr_type" -o ro "$usr_dev" "$NEWROOT/usr" \
 mkdir -p "$NEWROOT/var"
 mount "$var_dev" "$NEWROOT/var" || fail "state partition not mounted at $NEWROOT/var"
 
-# Materialize the factory /etc defaults onto /var/lib/etc (first boot;
-# never clobber existing files so user state survives reboots and
-# slot switches).
-if [ ! -e "$NEWROOT/var/lib/etc" ]; then
-    mkdir -p "$NEWROOT/var/lib/etc"
-    cp -an "$NEWROOT/usr/share/factory/etc/." "$NEWROOT/var/lib/etc/" \
-        || fail "cannot materialize /etc from the factory defaults"
-fi
+# Materialize the factory /etc defaults onto /var/lib/etc, per file and
+# never clobbering: admin state created at runtime (or injected by the
+# harness before a scenario boot) survives reboots and slot switches,
+# while missing factory files are restored. /var/lib/etc may pre-exist
+# (the harness drops fixtures there before boots), so this runs on every
+# boot, not only the first.
+mkdir -p "$NEWROOT/var/lib/etc"
+cp -an "$NEWROOT/usr/share/factory/etc/." "$NEWROOT/var/lib/etc/" \
+    || fail "cannot materialize /etc from the factory defaults"
 mkdir -p "$NEWROOT/etc"
 mount --bind "$NEWROOT/var/lib/etc" "$NEWROOT/etc" \
     || fail "cannot bind /etc over /var/lib/etc"

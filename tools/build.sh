@@ -2,18 +2,28 @@
 # Ingot build orchestrator.
 #
 # Usage:
-#   tools/build.sh [--local]
+#   tools/build.sh [--local] [--version <v>] [--slot <a|b>]
+#
+# By default builds the pinned release (tools/pins.json:image_version)
+# into slot A - the T1 baseline. --version/--slot build a different
+# version into the given slot (T2: v0.2.0 into the _empty slot B); the
+# per-build overrides are generated into image/mkosi.conf.d/90-build.conf
+# (git-ignored, overwritten on every run) and the generated repart
+# definitions into dist/mkosi-gen/.
 #
 # Steps:
 #   pins     tools/check-pins.py (host tools, firmware, keys, compose
 #            pin consistency between tools/pins.json and the mkosi conf)
+#   gen      per-build overrides (output name, image version, versioned
+#            UKI name, target-slot PARTUUID, repart definitions with the
+#            versioned slot label)
 #   image    mkosi build of the main image: the whole system as a GPT
 #            disk (signed UKI + fallback on the ESP, the slot erofs,
 #            the btrfs state partitions). Split artifacts: the erofs
 #            slot (SplitName=slot), the standalone UKI, kernel, initrd.
-#   verify   UKI PE sections + PARTUUIDs in the .cmdline; disk layout
-#            (fixed-UUID repart definitions); build metadata
-#            (dist/build-metadata.json, spec 20.4).
+#   verify   UKI PE sections + PARTUUIDs in the .cmdline + os-release
+#            VERSION_ID; disk layout (fixed-UUID repart definitions);
+#            build metadata (dist/build-metadata-<v>.json, spec 20.4).
 #
 # --local: build against the archived compose (--local-mirror) instead
 #          of the network. Requires the archive (tools/archive-compose.sh).
@@ -22,26 +32,107 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO=$(pwd)
 DIST=$REPO/dist
-IMAGE_VERSION=$(python3 -c 'import json;print(json.load(open("tools/pins.json"))["image_version"])')
+PINS_VERSION=$(python3 -c 'import json;print(json.load(open("tools/pins.json"))["image_version"])')
+VERSION=$PINS_VERSION
+SLOT=a
 ARCHIVE_DIR=$(python3 -c 'import json;print(json.load(open("tools/pins.json"))["compose"]["archive_dir"])')
 ARCHIVE_TREE="$ARCHIVE_DIR/compose/Everything/x86_64/os"
-DISK=$DIST/ingot_${IMAGE_VERSION}.raw
-SLOT=$DIST/ingot_${IMAGE_VERSION}.slot.raw
-UKI=$DIST/ingot_${IMAGE_VERSION}.efi
-# hyphen name: the underscore name is mkosi's own split initrd artifact
-INITRD=$DIST/ingot-${IMAGE_VERSION}.initrd
 
 local_mirror=0
-for arg in "$@"; do
-    case $arg in
+while [ $# -gt 0 ]; do
+    case $1 in
         --local) local_mirror=1 ;;
-        *) echo "unknown option: $arg" >&2; exit 2 ;;
+        --version) VERSION=${2:?--version needs a value}; shift ;;
+        --slot) SLOT=${2:?--slot needs a value}; shift ;;
+        *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
+    shift
 done
+case $SLOT in a|b) ;; *) echo "invalid --slot: $SLOT (want a or b)" >&2; exit 2 ;; esac
+case $VERSION in *[!0-9a-zA-Z.]*|'') echo "invalid --version: $VERSION" >&2; exit 2 ;; esac
+
+DISK=$DIST/ingot_${VERSION}.raw
+SLOT_RAW=$DIST/ingot_${VERSION}.slot.raw
+UKI=$DIST/ingot_${VERSION}.efi
+# hyphen name: the underscore name is mkosi's own split initrd artifact
+INITRD=$DIST/ingot-${VERSION}.initrd
 
 # --- pins ------------------------------------------------------------------
 python3 tools/check-pins.py
 
+# --- per-build overrides -----------------------------------------------------
+# The static image/mkosi.conf + image/repart-baseline/ are the
+# 0.1.0/slot-A baseline (checked against tools/pins.json). Per-build
+# differences are generated instead of edited: a conf.d drop-in (parsed
+# after the main conf, so its settings win) and repart definitions for
+# the two slot partitions. The baseline directory is NOT named
+# mkosi.repart/: mkosi would pick that up implicitly and pass it to
+# systemd-repart first, and systemd-repart's merge is first-directory-
+# wins - the generated 20/30 definitions must come first to override
+# the baseline copies.
+GEN=$DIST/mkosi-gen/ingot_${VERSION}-${SLOT}
+rm -rf "$GEN"
+mkdir -p "$GEN/repart" image/mkosi.conf.d
+
+slot_conf() { [ "$SLOT" = a ] && echo 20-slot-a || echo 30-slot-b; }
+STATE_UUID=$(grep '^UUID=' image/repart-baseline/40-var.conf | cut -d= -f2)
+SLOT_UUID=$(grep '^UUID=' "image/repart-baseline/$(slot_conf).conf" | cut -d= -f2)
+
+# the baseline keeps both slot definitions: the active-slot definition
+# (Format/CopyFiles/SplitName, 20-slot-a.conf) and the empty-slot
+# definition (30-slot-b.conf). A build's target slot takes the active
+# definition with its own fixed UUID; the other slot takes the empty
+# definition with its own fixed UUID.
+ACTIVE_BASE=image/repart-baseline/20-slot-a.conf
+EMPTY_BASE=image/repart-baseline/30-slot-b.conf
+for n in 20-slot-a 30-slot-b; do
+    n_uuid=$(grep '^UUID=' "image/repart-baseline/${n}.conf" | cut -d= -f2)
+    if { [ "$SLOT" = a ] && [ $n = 20-slot-a ]; } || { [ "$SLOT" = b ] && [ $n = 30-slot-b ]; }; then
+        sed -e "s/^UUID=.*/UUID=${n_uuid}/" -e "s/^Label=.*/Label=ingot_${VERSION}/" \
+            "$ACTIVE_BASE" > "$GEN/repart/${n}.conf"
+    else
+        sed -e "s/^UUID=.*/UUID=${n_uuid}/" -e "s/^Label=.*/Label=_empty/" \
+            "$EMPTY_BASE" > "$GEN/repart/${n}.conf"
+    fi
+    sed -i "1i # generated by tools/build.sh (--version ${VERSION} --slot ${SLOT}); derived from image/repart-baseline/ (the active definition: ${ACTIVE_BASE##*/}, the empty definition: ${EMPTY_BASE##*/})" \
+        "$GEN/repart/${n}.conf"
+done
+# versioned UKI name on the ESP (ingot_<v>.efi): the A/B entry name is
+# the version, so the boot loader orders entries by versionsort and the
+# entry identity carries the OS version (T2 A/B selection).
+cat > image/mkosi.conf.d/90-build.conf <<EOF
+[Output]
+Output=ingot_${VERSION}
+ImageVersion=${VERSION}
+# repart definitions: the generated slot definitions first (systemd-
+# repart's merge is first-directory-wins), then the baseline for the
+# 10/40/50 partitions (the baseline's 20/30 copies are shadowed).
+RepartDirectories=$GEN/repart,$REPO/image/repart-baseline
+
+[Content]
+UnifiedKernelImageFormat=ingot_${VERSION}
+# empty assignment resets the list; the kernel command line names the
+# PARTUUID of the slot this build's UKI mounts (the harness boots a
+# specific UKI, not a slot-discovery default).
+KernelCommandLine=
+KernelCommandLine=console=tty0
+KernelCommandLine=console=ttyS0
+KernelCommandLine=root=PARTUUID=${STATE_UUID}
+KernelCommandLine=rootfstype=btrfs
+KernelCommandLine=usr=PARTUUID=${SLOT_UUID}
+KernelCommandLine=usrfstype=erofs
+
+[Build]
+Environment=INITRD_NAME=ingot-${VERSION}.initrd
+Environment=OS_VERSION=${VERSION}
+EOF
+echo "build: generated per-build overrides (version ${VERSION}, slot ${SLOT})"
+
+# git tracks file modes as 100644/100755 only: a fresh checkout materializes
+# the snakeoil key 0644 (or wider under a loose umask), and mkosi refuses a
+# Secure Boot key that is group/world readable. Self-heal on every run so
+# any checkout builds.
+chmod 600 "$REPO/tools/keys/snakeoil.key"
 # --- mkosi main image --------------------------------------------------------
 mkdir -p "$DIST"
 # mkosi validates the --initrd path up front, and a non-empty Initrds=
@@ -65,7 +156,7 @@ mkosi "${mkosi_args[@]}"
 
 # --- artifact verification ----------------------------------------------------
 [ -f "$DISK" ] || { echo "disk image missing: $DISK" >&2; exit 1; }
-[ -f "$SLOT" ] || { echo "slot erofs split artifact missing: $SLOT" >&2; exit 1; }
+[ -f "$SLOT_RAW" ] || { echo "slot erofs split artifact missing: $SLOT_RAW" >&2; exit 1; }
 [ -f "$UKI" ] || { echo "UKI split artifact missing: $UKI" >&2; exit 1; }
 
 # UKI verification (acceptance: the UKI embeds the kernel, initramfs,
@@ -113,29 +204,34 @@ assert any(der in b[o:o + size] for o in offs), \
     "signature does not contain the pinned snakeoil certificate"
 print(f"UKI signature: security directory present (rva=0x{rva:x} size=0x{size:x}), snakeoil certificate verified")
 EOF
-# .cmdline carries the fixed-UUID slot/state PARTUUIDs; read the
-# section bytes directly (objdump -s wraps at 16 bytes per line, so a
-# plain grep for the 36-char PARTUUIDs would miss)
-python3 - "$UKI" <<'EOF'
+# .cmdline carries the fixed-UUID slot/state PARTUUIDs, and .osrel the
+# image's os-release (VERSION_ID must be the built version: the A/B
+# selection state reports the version, and the loader orders entries
+# by it). Read the section bytes directly (objdump -s wraps at 16 bytes
+# per line, so a plain grep for the 36-char PARTUUIDs would miss).
+python3 - "$UKI" "$VERSION" "$SLOT_UUID" <<'EOF'
 import struct, sys
 b = open(sys.argv[1], 'rb').read()
+want_version, slot_uuid = sys.argv[2], sys.argv[3]
 pe = struct.unpack_from('<I', b, 0x3c)[0]
 nsec = struct.unpack_from('<H', b, pe + 6)[0]
 opt = struct.unpack_from('<H', b, pe + 20)[0]
 sec = pe + 24 + opt
-cmd = None
-for i in range(nsec):
-    o = sec + i * 40
-    name = b[o:o + 8].split(b'\0')[0].decode()
-    if name == '.cmdline':
-        rs, ro = struct.unpack_from('<II', b, o + 16)
-        cmd = b[ro:ro + rs].rstrip(b'\0').decode()
-        break
-assert cmd, "UKI .cmdline section missing"
-for want in ("usr=PARTUUID=0066bfe5-47f1-52dc-9a16-1bb10191a1dc",
-             "root=PARTUUID=501347aa-775a-5736-8da3-2a9977c820ec"):
-    assert want in cmd, f"UKI .cmdline lacks {want}"
+def section(name):
+    for i in range(nsec):
+        o = sec + i * 40
+        if b[o:o + 8].split(b'\0')[0].decode() == name:
+            rs, ro = struct.unpack_from('<II', b, o + 16)
+            return b[ro:ro + rs]
+    return None
+cmd = section('.cmdline').rstrip(b'\0').decode()
+assert f"usr=PARTUUID={slot_uuid}" in cmd, f"UKI .cmdline lacks usr=PARTUUID={slot_uuid}"
+assert "root=PARTUUID=501347aa-775a-5736-8da3-2a9977c820ec" in cmd, "UKI .cmdline lacks the state PARTUUID"
+osrel = section('.osrel').decode()
+vid = [l for l in osrel.splitlines() if l.startswith('VERSION_ID=')]
+assert vid and vid[0] == f'VERSION_ID="{want_version}"', f"UKI .osrel VERSION_ID is {vid!r}, want {want_version}"
 print(f"UKI .cmdline: {cmd}")
+print(f"UKI .osrel: VERSION_ID={want_version}")
 EOF
 echo "build: UKI verified ($UKI: .linux/.initrd/.ucode/.cmdline/.osrel + signature, slot PARTUUIDs)"
 
@@ -152,10 +248,15 @@ for uuid in \
     echo "$layout" | grep -qi "$uuid" \
         || { echo "disk is missing the partition UUID $uuid" >&2; exit 1; }
 done
-echo "build: disk layout verified ($DISK: esp/ingot_${IMAGE_VERSION}/_empty/var/home, fixed PARTUUIDs)"
+if [ "$SLOT" = a ]; then
+    labels="esp/ingot_${VERSION}/_empty/var/home"
+else
+    labels="esp/_empty/ingot_${VERSION}/var/home"
+fi
+echo "build: disk layout verified ($DISK: $labels, fixed PARTUUIDs)"
 
 # --- build metadata (spec 20.4: record the build parameters) --------------------
-kv=$(python3 - "$DIST/ingot_${IMAGE_VERSION}.manifest" <<'EOF'
+kv=$(python3 - "$DIST/ingot_${VERSION}.manifest" <<'EOF'
 import json, sys
 m = json.load(open(sys.argv[1]))
 for p in m.get("packages", []):
@@ -164,21 +265,22 @@ for p in m.get("packages", []):
         break
 EOF
 )
-erofs_sha=$(sha256sum "$SLOT" | cut -d' ' -f1)
-python3 - "$erofs_sha" "$kv" <<'EOF'
+erofs_sha=$(sha256sum "$SLOT_RAW" | cut -d' ' -f1)
+python3 - "$erofs_sha" "$kv" "$VERSION" "$SLOT" <<'EOF'
 import json, sys, pathlib
-sha, kv = sys.argv[1], sys.argv[2]
+sha, kv, version, slot = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 pins = json.load(open("tools/pins.json"))
 meta = {
     "image_id": "ingot",
-    "image_version": pins["image_version"],
+    "image_version": version,
+    "slot": slot,
     "compose": pins["compose"]["id"],
     "kernel": kv,
     "rust": pins["rust"],
     "artifacts": {
-        "disk": f"ingot_{pins['image_version']}.raw",
+        "disk": f"ingot_{version}.raw",
         "slot_erofs": {
-            "artifact": f"ingot_{pins['image_version']}.slot.raw",
+            "artifact": f"ingot_{version}.slot.raw",
             "sha256": sha,
             "parameters": {
                 "source_date_epoch": 1789516800,
@@ -188,8 +290,9 @@ meta = {
         },
     },
 }
-pathlib.Path("dist/build-metadata.json").write_text(json.dumps(meta, indent=2) + "\n")
-print("metadata: dist/build-metadata.json")
+for name in (f"dist/build-metadata-{version}.json", "dist/build-metadata.json"):
+    pathlib.Path(name).write_text(json.dumps(meta, indent=2) + "\n")
+    print(f"metadata: {name}")
 EOF
 
 echo "build: done"
@@ -198,5 +301,5 @@ echo "build: done"
 # root via sudo, which the mkosi sandbox requires in restricted
 # environments); the harness and later steps run unprivileged
 if [ -n "${SUDO_USER:-}" ] && [ "$(id -u)" = 0 ]; then
-    chown -R "$SUDO_USER:$SUDO_UID" "$DIST"
+    chown -R "$SUDO_USER:$SUDO_UID" "$DIST" "$REPO/image/mkosi.conf.d"
 fi

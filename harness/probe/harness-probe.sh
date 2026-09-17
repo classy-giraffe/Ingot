@@ -1,13 +1,13 @@
 #!/bin/sh
 # Harness boot probe: collects boot state into a JSON document, writes
-# it to /var/lib/ingot/harness-probe.json, and prints it between frame
-# markers on the console (the QEMU harness parses it).
+# it to /var/lib/ingot-probe/harness-probe.json, and prints it between
+# frame markers on the console (the QEMU harness parses it).
 #
 # Runs under /bin/sh (brush). POSIX-only: no awk/sed/grep/eval.
 set -u
 
-out=/var/lib/ingot/harness-probe.json
-mkdir -p /var/lib/ingot
+out=/var/lib/ingot-probe/harness-probe.json
+mkdir -p /var/lib/ingot-probe
 
 # Escape a value as a JSON string body (no surrounding quotes).
 # Multi-line values are joined with literal \n.
@@ -76,6 +76,14 @@ kernel=$(uname -r)
 pid1_comm=$(cat /proc/1/comm)
 pid1_exe=$(readlink -f /proc/1/exe 2>/dev/null || echo unknown)
 cmdline=$(tr '\0' ' ' < /proc/cmdline)
+# booted slot's OS version: the slot-baked os-release (the UKI's .osrel
+# is generated from the same content); identifies which slot booted.
+version=""
+if [ -r /usr/lib/os-release ]; then
+    while IFS='=' read -r k v; do
+        [ "$k" = VERSION_ID ] && { version=${v#\"}; version=${version%\"}; break; }
+    done < /usr/lib/os-release
+fi
 # current CPU microcode revision (post early-load, /sys interface)
 microcode_rev=$(cat /sys/devices/system/cpu/microcode/revision 2>/dev/null || echo unknown)
 
@@ -120,13 +128,39 @@ etc_src=$rm_src
 multi_user=$(systemctl show -p ActiveState --value multi-user.target 2>/dev/null || echo unknown)
 system_running=$(systemctl is-system-running 2>/dev/null || true)
 
-failed_units=$(systemctl --failed --no-legend 2>/dev/null | cut -d ' ' -f 1)
+# Unit names of failed units, one per line. systemctl --failed prefixes
+# each line with a load-state indicator (a bullet), so the unit name is
+# the first whitespace-separated field that contains a dot (unit
+# identifiers always do: foo.service, bar.socket, ...).
+failed_units=""
+fu_first=1
+fu_raw=$(systemctl --failed --no-legend 2>/dev/null)
+while IFS= read -r fu_line; do
+    [ -z "$fu_line" ] && continue
+    for fu_tok in $fu_line; do
+        case $fu_tok in
+            *.*)
+                if [ $fu_first -eq 1 ]; then
+                    failed_units=$fu_tok
+                    fu_first=0
+                else
+                    failed_units="$failed_units
+$fu_tok"
+                fi
+                break
+                ;;
+        esac
+    done
+done <<EOF
+$fu_raw
+EOF
 journal_err=$(journalctl -b -p crit -q --no-pager 2>/dev/null || true)
 
 sh_path=$(readlink -f /bin/sh 2>/dev/null || echo unknown)
 
 doc=$(printf '{
   "kernel": "%s",
+  "version": "%s",
   "pid1_comm": "%s",
   "pid1_exe": "%s",
   "cmdline": "%s",
@@ -146,6 +180,7 @@ doc=$(printf '{
   "microcode_rev": "%s"
 }' \
     "$(jesc "$kernel")" \
+    "$(jesc "$version")" \
     "$(jesc "$pid1_comm")" \
     "$(jesc "$pid1_exe")" \
     "$(jesc "$cmdline")" \

@@ -43,14 +43,17 @@ final)
     echo "ingot: brush source ${BRUSH_SHA} staged at /work/artifacts/brush-source" >&2
 
     # --- machine identity (overrides the distro os-release; mkosi appends
-    #     IMAGE_ID/IMAGE_VERSION to it later) ---
-    cat > "$BUILDROOT/usr/lib/os-release" <<'EOF'
+    #     IMAGE_ID/IMAGE_VERSION to it later). The built version comes from
+    #     the per-build conf.d drop-in (Environment=OS_VERSION); the static
+    #     baseline is 0.1.0.
+    os_version=${OS_VERSION:-0.1.0}
+    cat > "$BUILDROOT/usr/lib/os-release" <<EOF
 NAME="Ingot"
-VERSION="0.1.0 (workstation)"
+VERSION="${os_version} (workstation)"
 ID=ingot
 ID_LIKE=fedora
-PRETTY_NAME="Ingot 0.1.0"
-VERSION_ID="0.1.0"
+PRETTY_NAME="Ingot ${os_version}"
+VERSION_ID="${os_version}"
 VARIANT=workstation
 VARIANT_ID=workstation
 HOME_URL="https://github.com/classy-giraffe/Ingot"

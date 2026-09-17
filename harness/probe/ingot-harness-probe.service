@@ -1,0 +1,18 @@
+# Harness-owned test fixture: the harness drops this unit into
+# /var/lib/etc/systemd/system/ (the bind source of /etc) on the working
+# disk's /var partition before each scenario boot. It is never built into
+# the image payload (payload boundary).
+[Unit]
+Description=Harness boot probe (machine-readable results)
+Documentation=man:ingot(7)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+ExecStart=/bin/sh /var/lib/ingot-probe/harness-probe.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -53,6 +53,15 @@ check("dosfstools version", harness_pins["host_tools"]["dosfstools"] in fat, f"g
 qemu = cmd_output("qemu-system-x86_64", "--version").strip().splitlines()
 qemu_ver = qemu[0] if qemu else ""
 check("mkosi version", mkosi.split()[-1:] and mkosi.split()[-1] == harness_pins["host_tools"]["mkosi"], f"got {mkosi!r}")
+just = cmd_output("just", "--version").strip()
+check("just version", harness_pins["host_tools"]["just"] in just, f"got {just!r}")
+sgdisk = cmd_output("sgdisk", "--version").strip()
+check("gptfdisk version", harness_pins["host_tools"]["gptfdisk"] in sgdisk, f"got {sgdisk!r}")
+sfdisk = cmd_output("sfdisk", "--version").strip()
+check("util-linux version", harness_pins["host_tools"]["util-linux"] in sfdisk, f"got {sfdisk!r}")
+mtools = cmd_output("mdir", "--version").strip()
+check("mtools version", harness_pins["host_tools"]["mtools"] in mtools, f"got {mtools!r}")
+
 
 # --- OVMF firmware -------------------------------------------------------
 for role in ("code", "vars"):
@@ -95,11 +104,30 @@ check(
 )
 
 version = pins["image_version"]
-slot_a = (REPO / "image/mkosi.repart/20-slot-a.conf").read_text()
+slot_a = (REPO / "image/repart-baseline/20-slot-a.conf").read_text()
 check(
     "slot label matches image version",
     f"Label=ingot_{version}" in slot_a,
     f"expected Label=ingot_{version}",
+)
+
+# --- payload boundary -------------------------------------------------------
+# Harness-owned test fixtures (harness/probe/ and friends) must never enter
+# the mkosi input tree: no symlink under image/ may resolve under harness/,
+# and no image/ file may reference a harness/ path.
+harness_root = REPO / "harness"
+boundary_violations = []
+for path in sorted((REPO / "image").rglob("*")):
+    if path.is_symlink():
+        resolved = path.resolve()
+        if resolved == harness_root or harness_root in resolved.parents:
+            boundary_violations.append(f"{path.relative_to(REPO)} -> {resolved}")
+    elif path.is_file() and b"harness/" in path.read_bytes():
+        boundary_violations.append(str(path.relative_to(REPO)))
+check(
+    "payload boundary (no harness/ under the mkosi input tree)",
+    not boundary_violations,
+    "; ".join(boundary_violations),
 )
 
 # --- summary --------------------------------------------------------------

@@ -26,6 +26,10 @@
     "mkosi": "26",
     "erofs-utils": "1.9",
     "btrfs-progs": "6.17.1",
-    "dosfstools": "4.2"
+    "dosfstools": "4.2",
+    "just": "1.45.0",
+    "gptfdisk": "1.0.10",
+    "util-linux": "2.41.3",
+    "mtools": "4.0.49"
   }
 }
