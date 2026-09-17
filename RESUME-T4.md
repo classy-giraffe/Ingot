@@ -8,7 +8,8 @@ starting T5+.
 **T4 complete.** All acceptance criteria verified on a real qcow2
 run; issue #18 closed. T4 developed directly on `main` (unlike
 T1-T3 feature branches): the engine commits plus the code-review
-fix batch (6 commits, 8ffa528..4c6d636) and `21470b8` (docs).
+fix batch and the standards/spec review follow-ups (parse split,
+phase splits, preflights).
 
 Read RESUME-T1/T2/T3.md first (build chain, per-version builds,
 A/B harness).
@@ -16,45 +17,53 @@ A/B harness).
 ## What T4 added
 
 - **`ingot-installer` crate** (`src/installer/`, second workspace
-  member, spec 7.1): binary `ingot-installer`. Parses and validates
-  the TOML config (all spec 11.4 categories: disk, source,
-  hostname, timezone, keemap/locale, partitioning, filesystem,
-  encryption [accepted, rejected at v1], initial users, SSH
-  authorized keys, services), then drives one engine through the
-  phases: validate -> repart partitioning from fixed-UUID
-  definitions (`image/repart-baseline/`) -> mkfs -> whole-image
-  slot deployment to both slots (active `ingot_<v>` + `_empty`) ->
+  member, spec 7.1): binary `ingot-installer`. Parses and
+  validates the TOML config (all spec 11.4 categories: disk,
+  source, hostname, timezone, locale, keymap, partition sizing,
+  filesystem choices, encryption [accepted, rejected at v1],
+  initial users, SSH authorized keys, services) - one parse
+  function per category, all diagnostics collected in one pass -
+  then drives one engine through the phases: validate -> repart
+  partitioning from the fixed-UUID definitions
+  (`image/repart-baseline/`) -> mkfs -> whole-image slot
+  deployment to both slots (active `ingot_<v>` + `_empty`) ->
   `/var/lib/etc` initialization (factory tree from the slot plus
-  config: hostname, localtime, locale, users, SSH keys, service
-  enables) -> bootctl install + UKI verification -> finalization
-  (sync, unmount). Logs every action to the target's
-  `/var/log/install.log`.
+  config: hostname, localtime, locale, keymap, users, SSH keys,
+  service enables) -> ESP/UKI verification -> finalization
+  (sync, unmount). Logs every action to `<work>/install.log` and
+  copies it to the target's `/var/lib/ingot/install.log` on
+  success and on failure.
 - **Config is the authorization.** Non-interactive by design
   (spec 11.4): no prompts. `--dry-run` reports the full plan and
   touches nothing (verified byte-identical qcow2).
 - **Working-copy model.** File targets (qcow2) are never modified
-  in place: `qemu-nbd` attach, `dd` whole-disk copy into the work
-  directory (default `/run/ingot-installer`, `--work` to override),
-  repart on the copy, atomic rename back. A preflight checks the
-  work volume holds the working copy (tmpfs `/run` can be smaller
-  than the disk).
-- **ESP handling.** The prebuilt ESP artifact carries systemd-boot
-  and the UKI at `/EFI/Linux/ingot_<v>.efi` (the image's
-  convention; systemd-boot >=250 auto-discovers `*/EFI/Linux`).
-  The engine copies the whole ESP, verifies the UKI bytes
-  against the artifact, and records `bootctl status` in the log.
-- **Tests.** 45 installer unit tests + 5 CLI contract tests
+  in place: `losetup` partscan attach, `dd` whole-disk copy into
+  the work directory (default `/run/ingot-install`, `--work` to
+  override), repart on the copy, atomic rename back. A preflight
+  checks the work volume holds the working copy (tmpfs `/run` can
+  be smaller than the disk).
+- **ESP handling.** The prebuilt ESP artifact carries
+  systemd-boot and the UKI at `/EFI/Linux/ingot_<v>.efi` (the
+  image's convention; systemd-boot >=250 auto-discovers
+  `*/EFI/Linux`). The engine copies the whole ESP, verifies the
+  UKI bytes against the artifact, and records `bootctl status` in
+  the log. The boot phase is verification, not construction:
+  bootctl install is baked into the prebuilt ESP artifact.
+- **Tests.** 46 installer unit tests + 5 CLI contract tests
   (args, exit codes, stderr): config parse/validate diagnostics,
-  layout computation, exact repart def rendering, capacity
-  preflight, UKI validation.
+  layout computation, exact repart def rendering, capacity and
+  tool-availability preflights, UKI validation.
 
 ## Preflights (fail before the first write)
 
-- `--dry-run`: plan only.
-- UEFI mode active on the running machine (Ingot installs UEFI
-  targets only).
-- Target is a qcow2 or raw file / block device; qcow2 needs
-  qemu-nbd (root).
+- `--dry-run`: plan only; works on any host (no UEFI needed).
+- UEFI mode active on the running machine (run path only; Ingot
+  installs UEFI targets only).
+- Required tools present in PATH (systemd-repart, dd, losetup,
+  partprobe, qemu-img, blkid, bootctl, mount, umount, sync, df,
+  plus the layout's mkfs set) - 11.5 phase 1.
+- Target is a qcow2 or raw file / block device (root for disk
+  ops).
 - Work volume free space >= disk virtual size.
 
 ## Verification evidence (installed disk, 2026-09-17)
@@ -68,12 +77,13 @@ A/B harness).
    localtime -> `/usr/share/zoneinfo/CST` (runtime path), locale,
    user `tommy` (uid 1000, shell, shadow 0600, authorized_keys
    600).
-4. ESP: `EFI/BOOT/BOOTx64.EFI`, `EFI/systemd/...`,
+4. ESP: `EFI/BOOT/BOOTX64.EFI`, `EFI/systemd/...`,
    `EFI/Linux/ingot_0.1.0.efi` byte-exact vs the artifact.
 5. `bootctl status` on the target shows systemd-boot on the
-   loader; engine phase log in `/var/log/install.log`.
+   loader; engine phase log in `/var/lib/ingot/install.log`.
 6. `--dry-run` qcow2: sha256 identical before/after.
-7. Workspace tests: 45 installer + 5 CLI + 16 update-helper green.
+7. Workspace tests: 46 installer + 5 CLI + 16 update-helper
+   green.
 
 ## Resume procedure (T5+)
 
@@ -81,8 +91,8 @@ A/B harness).
   `just rust-test` after any src/ change (offline, seconds).
 - Dry-run an install:
   `sudo src/target/release/ingot-installer --dry-run /path/config.toml`
-  (point `--artifacts-dir` at `dist/`; `[source]` in the config
-  names the split artifacts).
+  (`[source] base` in the config points at the artifact dir, e.g.
+  the repo's `dist/`).
 - Real run: same without `--dry-run`; add `--work /big/dir` when
   `/run` is too small for the disk's virtual size.
 - The qcow2 target must be created first:
@@ -103,6 +113,17 @@ A/B harness).
   `symvers-*.xz` files (harmless; image build cleanup).
 - Repart defs pin slot A `Compression=zstd` (the image's slot
   artifact is zstd; ext4 defs carry no Compression key).
+
+## Review follow-ups (open judgement calls)
+
+- Error style: the installer uses flat `Result<_, String>`
+  (operator-facing one-line diagnostics) instead of the
+  update-helper's `anyhow::Context`. Consistent within the crate;
+  a future change should pick one idiom workspace-wide.
+- `DiskTarget::prepare` builds the 7-field struct per target kind;
+  a builder would be speculative until a fourth kind appears.
+- config.rs is large (parse glue + 9 category fns + tests); if it
+  grows, split the test module into `tests/` integration tests.
 
 ## Follow-up tickets
 
