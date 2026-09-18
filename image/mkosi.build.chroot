@@ -24,6 +24,23 @@ export PKG_CONFIG=/usr/bin/x86_64-redhat-linux-gnu-pkg-config
 # bindings with bindgen (needs libclang, absent from the slot image);
 # the committed pregenerated bindings (from the pinned nettle3.10-devel
 # headers) are used instead.
+# selinux-sys (uutils' chcon/runcon) generates its bindings with
+# bindgen, which drives libclang. libclang locates its builtin
+# headers (stddef.h & co) in a "resource dir" derived from the
+# library's load location; rawhide's clang-libs layout (libclang in
+# /usr/lib64, builtin headers in /usr/lib/clang/<major>/include via
+# clang-resource-filesystem) does not satisfy that lookup, so the
+# parse dies with "stddef.h file not found". Pin the resource dir
+# explicitly (bindgen appends these to every clang invocation).
+CLANG_RESOURCE_DIR=
+for d in /usr/lib/clang/*/include; do
+    [ -f "$d/stddef.h" ] || continue
+    CLANG_RESOURCE_DIR=${d%/include}
+    break
+done
+[ -n "$CLANG_RESOURCE_DIR" ] \
+    || { echo "build: libclang resource dir (clang-resource-filesystem) not found" >&2; exit 1; }
+export BINDGEN_EXTRA_CLANG_ARGS="-resource-dir $CLANG_RESOURCE_DIR"
 export NETTLE_PREGENERATED_BINDINGS=/usr/src/ingot/update-helper/build/nettle-bindings.rs
 : "${BRUSH_SHA:?BRUSH_SHA must be set (image/mkosi.conf)}"
 [ -d /work/artifacts/brush-source ] \
