@@ -6,9 +6,10 @@
 # so build byproducts (source tree, cargo target/) stay out of the image
 # payload.
 #
-# Builds the two Rust components from source staged by the prepare
+# Builds the Rust components from source staged by the prepare
 # script (final phase) at /work/artifacts/: brush (pinned upstream,
-# the first Rust component) and the in-repo workspace's
+# the runtime root's /bin/sh) and nushell (pinned upstream, the
+# interactive admin shell), plus the in-repo workspace's
 # ingot-update-helper, and installs them into the image via $DESTDIR:
 # mkosi copies $DESTDIR into the image root after the build scripts
 # ("Copying in build tree"), which is the only way build-script output
@@ -48,6 +49,22 @@ cargo build --release --locked --offline \
 install -D -m 0755 /usr/src/brush/target/release/brush "$DESTDIR/usr/bin/brush"
 # brush is /bin/sh on the runtime root (usr-merged /bin -> usr/bin)
 ln -sf brush "$DESTDIR/usr/bin/sh"
+
+# --- nushell: the interactive admin shell (spec 3.1). Same discipline
+# as brush: pinned upstream source, primed registry, offline --locked
+# build, installed via $DESTDIR.
+: "${NUSHELL_SHA:?NUSHELL_SHA must be set (image/mkosi.conf)}"
+[ -d /work/artifacts/nushell-source ] \
+    || { echo "build: nushell source missing at /work/artifacts/nushell-source" >&2; exit 1; }
+rm -rf /usr/src/nushell
+cp -a /work/artifacts/nushell-source /usr/src/nushell
+cargo build --release --locked --offline \
+    --manifest-path /usr/src/nushell/Cargo.toml --bin nu
+install -D -m 0755 /usr/src/nushell/target/release/nu "$DESTDIR/usr/bin/nu"
+# the interactive shell's canonical name (the installer's default
+# user shell references /usr/bin/nushell)
+ln -sf nu "$DESTDIR/usr/bin/nushell"
+echo "ingot: nushell ${NUSHELL_SHA} built and staged to /usr/bin/nu (+ /usr/bin/nushell)" >&2
 
 # --- ingot-update-helper: the in-repo Rust workspace (spec 7.1). The
 # source was staged by the prepare script (final phase) at
