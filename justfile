@@ -55,3 +55,29 @@ rust-test:
 # the installed machine. Root (KVM, the config-disk loop mount).
 iso:
 	sudo python3 harness/iso.py
+
+# Manually test the live ISO interactively: boots QEMU with KVM, 4 cores,
+# 8 GB RAM, Secure Boot on (OVMF snakeoil keys enrolled), and an attached
+# 32 GB virtual HDD (dist/test-target.raw). Connects the serial console
+# to stdio (exit with 'poweroff' in guest, or 'Ctrl-A x' in QEMU). Also
+# forwards SSH to host port 2222 (ssh -i tools/keys/live.key -p 2222 root@127.0.0.1).
+test-iso *extra:
+	@mkdir -p dist
+	@[ -f dist/test-target.raw ] || truncate -s 32G dist/test-target.raw
+	@cp -f /usr/share/OVMF/OVMF_VARS_4M.snakeoil.fd dist/test-vars.fd
+	qemu-system-x86_64 \
+		-machine q35,smm=on \
+		-accel kvm \
+		-cpu host \
+		-smp 4 \
+		-m 8G \
+		-drive if=pflash,format=raw,unit=0,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.snakeoil.fd \
+		-drive if=pflash,format=raw,unit=1,file=dist/test-vars.fd \
+		-cdrom dist/ingot_0.1.0.iso \
+		-drive id=disk0,if=none,format=raw,file=dist/test-target.raw \
+		-device virtio-blk-pci,drive=disk0 \
+		-netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22 \
+		-device virtio-net-pci,netdev=net0 \
+		-serial mon:stdio \
+		-display none \
+		{{extra}}
