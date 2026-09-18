@@ -36,6 +36,7 @@ for d in /sys/block/*; do
     case $n in loop* | ram* | dm-* | md*) continue ;; esac
     dev="/dev/$n"
     [ -b "$dev" ] || continue
+    blkid -s TYPE "$dev" >/dev/null 2>&1 || continue
     if mount -o ro,noexec,nosuid "$dev" "$CONFIG_MOUNT" 2>/dev/null; then
         if [ -f "$CONFIG_MOUNT/ingot-install.toml" ]; then
             config_dev=$dev

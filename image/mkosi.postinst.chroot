@@ -72,6 +72,10 @@ ln -s ../ingot-ssh-hostkeys.service \
     "$factory_etc/systemd/system/multi-user.target.wants/ingot-ssh-hostkeys.service"
 ln -s ../getty@ttyS0.service \
     "$factory_etc/systemd/system/getty.target.wants/getty@ttyS0.service"
+# Mask systemd-loop@.service: systemd-dissect is not installed in the
+# minimal image (part of systemd-container), and unmasked it fails on
+# block devices like the ISO cdrom /dev/sr0.
+ln -sf /dev/null "$factory_etc/systemd/system/systemd-loop@.service"
 
 # --- Account database and PAM factory baseline (spec 21.2, locked in
 #     #6: PAM/shadow/login paths). The runtime /etc is materialized
@@ -92,6 +96,8 @@ done
 cp -a /etc/pam.d "$factory_etc/"
 [ -d /etc/security ] && cp -a /etc/security "$factory_etc/"
 [ -d /etc/authselect ] && cp -a /etc/authselect "$factory_etc/"
+touch "$factory_etc/environment"
+mkdir -p "$factory_etc/security" && touch "$factory_etc/security/pam_env.conf"
 # console login on the serial headless terminal (spec 10.2): the
 # login stack's pam_securetty gates root console logins on
 # /etc/securetty; the package default covers the virtual consoles,
@@ -128,6 +134,6 @@ echo "ingot: account + PAM factory baseline and profile service set staged in sh
 # The staged initrd is named after the built version (tools/build.sh
 # exports INITRD_NAME via the per-build conf.d drop-in).
 mkdir -p "$ARTIFACTDIR/io.mkosi.initrd"
-dracut --force --no-hostonly --add bash --kver "$kv" \
+dracut --force --no-hostonly --add bash --omit crypt --kver "$kv" \
     "$ARTIFACTDIR/io.mkosi.initrd/${INITRD_NAME:-ingot-0.1.0.initrd}"
 echo "ingot: initramfs staged at $ARTIFACTDIR/io.mkosi.initrd/${INITRD_NAME:-ingot-0.1.0.initrd}" >&2
