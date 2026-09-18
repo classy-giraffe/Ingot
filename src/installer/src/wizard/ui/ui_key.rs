@@ -88,7 +88,7 @@ impl Ui {
             }
             KeyCode::Left if self.step == Step::Users => self.sub = 0,
             KeyCode::Right if self.step == Step::Users => self.sub = 1,
-            KeyCode::Left | KeyCode::Right => self.cycle(k.code),
+            KeyCode::Left | KeyCode::Right => self.cycle(),
             KeyCode::Insert if matches!(
                 self.step,
                 Step::Users | Step::Ssh | Step::Services
@@ -107,36 +107,34 @@ impl Ui {
         }
     }
 
-    fn cycle(&mut self, code: KeyCode) {
-        let dir = if code == KeyCode::Left { -1 } else { 1 };
+    fn cycle(&mut self) {
+        // left and right both cycle the two v1 choices
         match self.step {
             Step::Filesystems => match self.sel {
                 0 => {} // the slot filesystem is fixed in v1
-                1 => self.draft.fs_var = if dir < 0 {
-                    crate::config::StateFs::Ext4
-                } else {
-                    crate::config::StateFs::Btrfs
-                },
-                2 => self.draft.fs_home = if dir < 0 {
-                    crate::config::StateFs::Ext4
-                } else {
-                    crate::config::StateFs::Btrfs
-                },
+                1 => {
+                    self.draft.fs_var = match self.draft.fs_var {
+                        crate::config::StateFs::Ext4 => crate::config::StateFs::Btrfs,
+                        crate::config::StateFs::Btrfs => crate::config::StateFs::Ext4,
+                    }
+                }
+                2 => {
+                    self.draft.fs_home = match self.draft.fs_home {
+                        crate::config::StateFs::Ext4 => crate::config::StateFs::Btrfs,
+                        crate::config::StateFs::Btrfs => crate::config::StateFs::Ext4,
+                    }
+                }
                 _ => {}
             },
             Step::Encryption => {
-                let (cur, next) = if dir < 0 {
-                    (None, Luks2)
-                } else {
-                    (Luks2, None)
-                };
                 let e = match self.sel {
                     0 => &mut self.draft.enc_var,
                     _ => &mut self.draft.enc_home,
                 };
-                if *e != cur {
-                    *e = next
-                }
+                *e = match *e {
+                    crate::config::Encryption::None => crate::config::Encryption::Luks2,
+                    crate::config::Encryption::Luks2 => crate::config::Encryption::None,
+                };
             }
             _ => {}
         }
