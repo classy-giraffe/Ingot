@@ -11,6 +11,11 @@
       "repo": "https://github.com/reubeno/brush",
       "tag": "brush-v0.4.0",
       "sha": "a2886cc09c88947a1bdab5900919c673ae29287f"
+    },
+    "nushell": {
+      "repo": "https://github.com/nushell/nushell",
+      "tag": "0.115.1",
+      "sha": "798c55d19505fd52f205d7eb32a571b9d06ec9e6"
     }
   }
 }

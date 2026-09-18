@@ -103,6 +103,13 @@ check(
     f"conf={m.group(1) if m else None!r} pins={pins['rust']['brush']['sha']!r}",
 )
 
+m = re.search(r"^Environment=NUSHELL_SHA=(\S+)$", mkosi_conf, re.M)
+check(
+    "nushell pin (NUSHELL_SHA)",
+    m is not None and m.group(1) == pins["rust"]["nushell"]["sha"],
+    f"conf={m.group(1) if m else None!r} pins={pins['rust']['nushell']['sha']!r}",
+)
+
 version = pins["image_version"]
 slot_a = (REPO / "image/repart-baseline/20-slot-a.conf").read_text()
 check(

@@ -31,6 +31,14 @@ prod:
 ab:
 	python3 harness/run_ab.py
 
+# T4 installer: the declarative install engine. The TOML config is
+# the authorization (spec 11.4); run with --dry-run first to
+# inspect the plan. Root for disk operations; file targets need a
+# work volume with at least the disk's virtual size free (use
+# --work; /run is tmpfs and may be smaller than the disk).
+install *args:
+	sudo src/target/release/ingot-installer {{args}}
+
 # Host-side unittest suite (no VM, seconds).
 test:
 	python3 -m unittest discover -s harness -p 'test_*.py' -v

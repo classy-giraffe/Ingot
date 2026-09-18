@@ -1,8 +1,8 @@
 #!/bin/sh
 # Main image prepare script. Runs in two phases:
 #   - arg "final": after OS package install (no build overlay): fetch
-#     the pinned brush source and stage the in-repo Rust workspace
-#     (src/) into the artifacts directory (consumed by the build
+#     the pinned brush and nushell sources and stage the in-repo Rust
+#     workspace (src/) into the artifacts directory (consumed by the build
 #     script; not part of the image payload) and set the machine
 #     identity in the image root.
 #   - arg "build": prime the cargo registry (crates.io, with network)
@@ -44,6 +44,20 @@ final)
     cp -a "$src" "$ARTIFACTDIR/brush-source"
     echo "ingot: brush source ${BRUSH_SHA} staged at /work/artifacts/brush-source" >&2
 
+    # --- pinned nushell source into the artifacts dir (not the
+    #     payload): the interactive admin shell (spec 3.1), pinned
+    #     upstream commit like brush
+    : "${NUSHELL_SHA:?NUSHELL_SHA must be set (image/mkosi.conf)}"
+    curl -fL --retry 3 "https://github.com/nushell/nushell/archive/${NUSHELL_SHA}.tar.gz" \
+        -o "$work/nushell.tar.gz"
+    tar -C "$work" -xzf "$work/nushell.tar.gz"
+    src=$(find "$work" -mindepth 1 -maxdepth 1 -type d -name "nushell-*" | head -n 1)
+    [ -n "$src" ] || { echo "nushell source tree not found" >&2; exit 1; }
+    [ -f "$src/Cargo.toml" ] || { echo "nushell source has no Cargo.toml" >&2; exit 1; }
+    rm -rf "$ARTIFACTDIR/nushell-source"
+    cp -a "$src" "$ARTIFACTDIR/nushell-source"
+    echo "ingot: nushell source ${NUSHELL_SHA} staged at /work/artifacts/nushell-source" >&2
+
     # --- Ingot workspace source (src/ in the repo) into the artifacts
     #     dir (not the payload): the in-repo Rust workspace (spec 7.1:
     #     installer + update-helper) is staged like the pinned brush
@@ -79,7 +93,7 @@ EOF
 
 build)
     # Prime the cargo registry (index + crate sources) for the pinned
-    # brush build and the in-repo workspace build, using the image's
+    # brush and nushell builds and the in-repo workspace build, using the image's
     # network access (prepare scripts always run with network). The
     # cache lands in the artifacts dir, which the build script (chroot,
     # no network by default) reuses with --offline: the build itself is
@@ -94,6 +108,10 @@ build)
         || { echo "build: ingot workspace source missing (run the final phase first)" >&2; exit 1; }
     mkosi-chroot env CARGO_HOME=/work/artifacts/cargo-home HOME=/ \
         cargo fetch --locked --manifest-path /work/artifacts/ingot-source/Cargo.toml
+    [ -d "$ARTIFACTDIR/nushell-source" ] \
+        || { echo "build: nushell source missing (run the final phase first)" >&2; exit 1; }
+    mkosi-chroot env CARGO_HOME=/work/artifacts/cargo-home HOME=/ \
+        cargo fetch --locked --manifest-path /work/artifacts/nushell-source/Cargo.toml
     echo "ingot: cargo registry primed at /work/artifacts/cargo-home" >&2
     ;;
 

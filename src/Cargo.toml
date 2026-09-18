@@ -8,7 +8,7 @@
 # versions are part of the build pin, like the compose and source pins.
 [workspace]
 resolver = "2"
-members = ["update-helper"]
+members = ["installer", "update-helper"]
 
 [workspace.package]
 version = "0.1.0"
@@ -30,4 +30,8 @@ anyhow = "1.0"
 # (src/update-helper/build/nettle-bindings.rs, NETTLE_PREGENERATED_BINDINGS);
 # the image carries libnettle as a runtime dependency.
 sequoia-openpgp = "2.4"
+# declarative install config (ingot-installer)
+toml = "0.9"
+# streaming sha256 (slot deploy read-back verification, ingot-installer)
+sha2 = "0.10"
 
