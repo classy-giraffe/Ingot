@@ -14,7 +14,9 @@ use size::ByteSize;
 use version::Version;
 
 mod parse;
+mod render;
 use parse::*;
+pub use render::render;
 
 /// Default login shell for initial users (spec: nushell is the
 /// default interactive shell). The shell must exist in the slot; the
@@ -22,7 +24,7 @@ use parse::*;
 pub const DEFAULT_SHELL: &str = "/usr/bin/nushell";
 
 /// The parsed and validated install config.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     // 11.4.1 target disk
     pub target_disk: String,
@@ -79,7 +81,7 @@ pub enum Encryption {
 
 /// An initial user (11.4.9). The first user is the administrator
 /// (uid 1000); later users take the next free uids.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
     pub name: String,
     /// Login shell; `None` = DEFAULT_SHELL.
