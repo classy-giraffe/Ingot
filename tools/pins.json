@@ -14,8 +14,8 @@
     },
     "nushell": {
       "repo": "https://github.com/nushell/nushell",
-      "tag": "0.99.1",
-      "sha": "8812072f065be283df3e9a81f3945d0364f2f247"
+      "tag": "0.115.1",
+      "sha": "798c55d19505fd52f205d7eb32a571b9d06ec9e6"
     }
   }
 }
