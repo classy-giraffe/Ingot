@@ -26,6 +26,7 @@ mod sshkey;
 mod target;
 mod ukify;
 mod version;
+mod wizard;
 
 fn main() -> std::process::ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
