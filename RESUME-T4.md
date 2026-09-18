@@ -104,7 +104,8 @@ A/B harness).
 
 ## Resume procedure (T5+)
 
-- `just build` (or `tools/build.sh --local`): green ~15-20 min;
+- `just build` (or `tools/build.sh --local`): green ~40-60 min per
+  version since the nushell pin (see the nushell section below);
   `just rust-test` after any src/ change (offline, seconds).
 - Dry-run an install:
   `sudo src/target/release/ingot-installer --dry-run /path/config.toml`
@@ -117,6 +118,48 @@ A/B harness).
   virtual disk fails the capacity preflight by 2 MiB:
   `qemu-img create -f qcow2 t4/disk.qcow2 30G`.
 
+## Nushell admin shell (2026-09-18)
+
+Spec 3.1/20.1: nushell is the required interactive admin shell; the
+image now carries it. Standing decision: every Rust component is
+built from pinned source (never an rpm from the compose), same
+discipline as brush.
+
+- **Pin:** nushell `0.115.1` (commit
+  `798c55d19505fd52f205d7eb32a571b9d06ec9e6`, the latest release at
+  pin time). NOT 0.99.1 (the compose's packaged version): its
+  locked `openssl-sys 0.9.103` rejects the compose's OpenSSL 4.0
+  (version gate: 1.0.1-1.1.1/3 only). 0.115.1's lockfile pins
+  `openssl-sys 0.9.116`, which supports OpenSSL 4.x. `tools/pins.json`
+  carries the pin; `Environment=NUSHELL_SHA=` in `mkosi.conf` must
+  match (check-pins.py enforces, same as BRUSH_SHA).
+- **Mechanics:** `mkosi.prepare` fetches the tarball (final phase,
+  network) and stages `nushell-source/` into the artifacts dir;
+  `cargo fetch --locked` priming includes its lockfile's crate set.
+  `mkosi.build.chroot` runs `cargo build --release --locked
+  --offline --manifest-path /usr/src/nushell/Cargo.toml --bin nu`
+  and installs via `$DESTDIR` (`/usr/bin/nu` + `nushell -> nu`
+  symlink; the build script, not a files overlay, creates the
+  symlink so no CopyFiles symlink semantics are involved).
+- **Runtime libs:** `nu` dynamically links `libssl.so.4` /
+  `libcrypto.so.4` (TLS) and `libsqlite3.so.0` (query sqlite) -
+  `openssl-libs` + `sqlite-libs` added to the runtime `Packages=`;
+  `openssl-devel` added to `BuildPackages=` for the openssl-sys
+  build script. The slot carries no -dev packages.
+- **Shell model (three tiers):** `/bin/sh` = brush (POSIX scripts
+  and the runtime root), interactive login/admin shell = nushell
+  (`/usr/bin/nu`, `/usr/bin/nushell`), bash remains as the admin
+  escape hatch. Recorded in CONTEXT.md.
+- **Commits:** `cfa2bc9` (build from source), `03c2838` (CONTEXT),
+  `95e40ff` (runtime libraries + `openssl-devel`), `62e80e7` (pin
+  0.115.1). Evidence: both `dist/ingot_0.1.0.slot.raw` and
+  `dist/ingot_0.2.0.slot.raw` carry `bin/nu` (79 MiB ELF)
+  + the `nushell` symlink + the runtime libs; T1 harness 15/15
+  after the change.
+- **Build time:** the nushell release build (~700 units) adds
+  roughly 25-35 min per version; expect ~40-60 min per
+  `tools/build.sh --local` invocation now.
+
 ## Known gaps (image side, not installer)
 
 - No `sshd.service` in the image (not in
@@ -124,15 +167,9 @@ A/B harness).
   `service-skip` and continues - the spec allows enabling only
   shipped units. T5+ wants sshd in the image for the workstation
   profile.
-- The image does not ship `nushell` even though the spec makes it
-  the required default interactive shell (spec 3.1, 11.4, 20.1)
-  and the config's default shell is `/usr/bin/nushell`. The
-  release validation (shell must exist in the slot) correctly
-  rejects configs that use it until the image installs it. The
-  compose archive carries `nushell-0.99.1-8.fc46.x86_64.rpm`, so
-  adding it to the mkosi `Packages=` list is a one-line image
-  change (T5+). Verify installs with `shell = "/usr/bin/bash"`
-  in the meantime.
+- **Resolved 2026-09-18:** the image now builds nushell from
+  pinned source (below). The installer's release validation
+  accepts `/usr/bin/nushell` again.
 - Factory tree has no base-system users
   (`/usr/lib/users/0001.toml` missing): `shadow`/`passwd`/`group`
   get only the configured users. Image build should add the base
