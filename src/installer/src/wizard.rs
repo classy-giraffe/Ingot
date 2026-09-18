@@ -244,5 +244,7 @@ fn source_version(base: &str) -> String {
         .unwrap_or_default()
 }
 
+pub mod ui;
+
 #[cfg(test)]
 mod tests;
