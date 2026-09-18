@@ -96,10 +96,10 @@ fn footer_hint(ui: &Ui) -> &'static str {
     use super::Step;
     match ui.screen {
         Screen::Step => match ui.step {
-            Step::Users => " j/k user - left/right field - a add - x remove - enter next - esc back - ctrl-c abort",
-            Step::Ssh | Step::Services => " j/k move - a add - x remove - enter next - esc back - ctrl-c abort",
+            Step::Users => " up/down user - left/right field - insert add - delete remove - enter next - esc back - ctrl-c abort",
+            Step::Ssh | Step::Services => " up/down move - insert add - delete remove - enter next - esc back - ctrl-c abort",
             Step::Review => " enter write config + show plan - esc edit",
-            _ => " j/k move - enter next - backtab/esc back - ctrl-c abort",
+            _ => " up/down move - enter next - backtab/esc back - ctrl-c abort",
         },
         Screen::Plan => {
             if ui.dry_run {
@@ -183,7 +183,7 @@ fn step_lines(
         }
         Step::Users => {
             if ui.draft.users.is_empty() {
-                out.push(Line::from(Span::styled("  (no users: press a to add one)", dim())));
+                out.push(Line::from(Span::styled("  (no users: press insert to add one)", dim())));
             }
             for (i, u) in ui.draft.users.iter().enumerate() {
                 let active = i == ui.sel;
@@ -226,7 +226,7 @@ fn step_lines(
             };
             if items.is_empty() {
                 out.push(Line::from(Span::styled(
-                    "  (empty: press a to add a line)",
+                    "  (empty: press insert to add a line)",
                     dim(),
                 )));
             }

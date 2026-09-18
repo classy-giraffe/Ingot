@@ -1,6 +1,11 @@
 //! Key-input handling for the wizard: the per-screen dispatch,
 //! navigation, field editing, row add/remove, and the plan and
 //! confirmation key handlers.
+//!
+//! Row navigation is arrow-keys only and row actions are the
+//! Insert/Delete keys: printable characters must never be
+//! intercepted, because they are typed into fields (paths, hostnames,
+//! SSH keys).
 
 use super::{Outcome, Screen, Step, Ui};
 use crate::wizard;
@@ -97,17 +102,7 @@ impl Ui {
                 self.del_row()
             }
             KeyCode::Backspace => self.backspace(),
-            KeyCode::Char(c) if self.sub != 1 && !c.is_control() => self.append(c),
-            KeyCode::Char('j') | KeyCode::Down => {
-                if self.sel + 1 < self.rows() {
-                    self.sel += 1
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.sel = self.sel.saturating_sub(self.sel + 1);
-            }
-            KeyCode::Char('a') => self.add_row(),
-            KeyCode::Char('x') => self.del_row(),
+            KeyCode::Char(c) if !c.is_control() => self.append(c),
             _ => {}
         }
     }
@@ -349,7 +344,11 @@ impl Ui {
                     self.flash = Some("type 'yes' and press enter to install".into());
                 }
             }
-            KeyCode::Esc => {}
+            KeyCode::Esc => {
+                self.prompt = Some(
+                    "Abort the install? The target disk is untouched. (y/n)".into(),
+                );
+            }
             KeyCode::Backspace => {
                 self.confirm.pop();
             }
