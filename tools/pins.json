@@ -16,6 +16,21 @@
       "repo": "https://github.com/nushell/nushell",
       "tag": "0.115.1",
       "sha": "798c55d19505fd52f205d7eb32a571b9d06ec9e6"
+    },
+    "helix": {
+      "repo": "https://github.com/helix-editor/helix",
+      "tag": "25.07.1",
+      "sha": "a05c151bb6e8e9c65ec390b0ae2afe7a5efd619b"
+    },
+    "zellij": {
+      "repo": "https://github.com/zellij-org/zellij",
+      "tag": "v0.45.1",
+      "sha": "efd8fd5a89a20c07a111d248ad7fce53848d2c18"
+    },
+    "coreutils": {
+      "repo": "https://github.com/uutils/coreutils",
+      "tag": "0.12.0",
+      "sha": "dc1efd89948a9ca4c78c3a4b9a6ac891019a8c69"
     }
   }
 }

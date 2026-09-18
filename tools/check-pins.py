@@ -96,19 +96,17 @@ check(
     f"conf={m.group(1) if m else None!r} expected={snapshot!r}",
 )
 
-m = re.search(r"^Environment=BRUSH_SHA=(\S+)$", mkosi_conf, re.M)
-check(
-    "brush pin (BRUSH_SHA)",
-    m is not None and m.group(1) == pins["rust"]["brush"]["sha"],
-    f"conf={m.group(1) if m else None!r} pins={pins['rust']['brush']['sha']!r}",
-)
-
-m = re.search(r"^Environment=NUSHELL_SHA=(\S+)$", mkosi_conf, re.M)
-check(
-    "nushell pin (NUSHELL_SHA)",
-    m is not None and m.group(1) == pins["rust"]["nushell"]["sha"],
-    f"conf={m.group(1) if m else None!r} pins={pins['rust']['nushell']['sha']!r}",
-)
+# Each Rust component pin: the mkosi.conf Environment=<NAME>_SHA= line
+# must carry the commit SHA recorded in tools/pins.json (the same SHA
+# the prepare phase fetches the source with).
+for name, spec in pins["rust"].items():
+    env_name = name.upper() + "_SHA"
+    m = re.search(rf"^Environment={env_name}=(\S+)$", mkosi_conf, re.M)
+    check(
+        f"{name} pin ({env_name})",
+        m is not None and m.group(1) == spec["sha"],
+        f"conf={m.group(1) if m else None!r} pins={spec['sha']!r}",
+    )
 
 version = pins["image_version"]
 slot_a = (REPO / "image/repart-baseline/20-slot-a.conf").read_text()
