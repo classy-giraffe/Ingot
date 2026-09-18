@@ -117,7 +117,8 @@ pub fn available_versions(base: &Path) -> Vec<Version> {
     };
     let mut out = Vec::new();
     for e in rd.flatten() {
-        let Some(name) = e.file_name().to_str() else {
+        let file_name = e.file_name();
+        let Some(name) = file_name.to_str() else {
             continue;
         };
         let Some(v) = name
@@ -130,7 +131,7 @@ pub fn available_versions(base: &Path) -> Vec<Version> {
             continue;
         };
         if m.is_file() {
-            if let Ok(v) = version::parse(v) {
+            if let Ok(v) = crate::version::parse(v) {
                 out.push(v);
             }
         }
