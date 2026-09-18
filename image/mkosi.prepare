@@ -24,7 +24,10 @@ set -eu
 # as root (tools/ingot-build sudo wrapper, HOME=/root without a
 # toolchain), so also fall back to the host user's rustup install.
 PATH="${HOME}/.cargo/bin:/home/tommy/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
-export PATH
+# the build must never block on interactive credentials: any git
+# operation that would prompt (deleted/renamed upstream repos during
+# the grammar staging) fails fast so the fallback logic can run
+export GIT_TERMINAL_PROMPT=0
 
 [ "$#" -eq 1 ] || { echo "usage: mkosi.prepare <final|build>" >&2; exit 1; }
 phase=$1
@@ -84,16 +87,34 @@ final)
     #     the fork below.
     helix_root="$ARTIFACTDIR/helix-source"
     mkdir -p "$helix_root/runtime/grammars/sources"
-    awk '/^\[\[grammar\]\]/{blk=1; name=""}
-         blk && /^name = /{name=$3; gsub(/"/, "", name)}
-         blk && /source = \{ git = /{
-             match($0, /git = "[^"]*"/); url=substr($0, RSTART+7, RLENGTH-8)
-             match($0, /rev = "[^"]*"/); rev=substr($0, RSTART+7, RLENGTH-8)
-             print name "\t" url "\t" rev
-             blk=0
-         }' "$helix_root/languages.toml" > "$work/helix-grammars.tsv"
+    # Order-independent and whitespace-tolerant: the toml blocks use
+    # both `name = "x"` and `name ="x"`, and some blocks put the
+    # source line before the name line. Emit at the block boundary,
+    # not at the source line.
+    awk '/^\[/ {
+            if (have) print name "\t" url "\t" rev
+            name=""; url=""; rev=""; have=0
+            ing = ($0 ~ /^\[\[grammar\]\]/)
+            next
+        }
+        ing && /^name[ \t]*=/ {
+            s=$0; sub(/^name[ \t]*=[ \t]*/, "", s); sub(/^"/, "", s); sub(/".*$/, "", s)
+            name=s
+        }
+        ing && /source[ \t]*=[ \t]*\{[ \t]*git[ \t]*=/ {
+            if (match($0, /git[ \t]*=[ \t]*"[^"]*"/)) { u=substr($0, RSTART, RLENGTH); sub(/^git[ \t]*=[ \t]*"/, "", u); sub(/"$/, "", u); url=u }
+            if (match($0, /rev[ \t]*=[ \t]*"[^"]*"/)) { r=substr($0, RSTART, RLENGTH); sub(/^rev[ \t]*=[ \t]*"/, "", r); sub(/"$/, "", r); rev=r }
+            have=1
+        }
+        END { if (have) print name "\t" url "\t" rev }' "$helix_root/languages.toml" > "$work/helix-grammars.tsv"
     [ -s "$work/helix-grammars.tsv" ] \
         || { echo "final: helix grammar list empty ($helix_root/languages.toml?)" >&2; exit 1; }
+    # guard against a parser regression: every line must be exactly
+    # name \t url \t <40-hex sha>; a shifted or empty field would
+    # otherwise surface downstream as an obscure fetch failure
+    awk -F'\t' 'NF != 3 || $1 == "" || $2 !~ /^https:/ || $3 !~ /^[0-9a-f]{40}$/ {
+        print "final: helix grammar parse produced a malformed line: " $0; bad=1
+    } END { exit bad }' "$work/helix-grammars.tsv"
     grammar_mirror() {
         case "$1" in
             gotmpl) echo "https://github.com/ngalaiko/tree-sitter-go-template" ;;
@@ -110,11 +131,19 @@ final)
         # compares the remote against languages.toml before deciding a
         # fetch is needed.
         git -C "$gdir" remote add origin "$gurl"
-        if ! git -C "$gdir" fetch -q --depth 1 origin "$grev" 2>/dev/null; then
+        # two quiet attempts, then one visible: a dead or renamed
+        # upstream repo must fail fast (GIT_TERMINAL_PROMPT=0), and a
+        # real failure leaves the git error in the log
+        if git -C "$gdir" fetch -q --depth 1 origin "$grev" 2>/dev/null \
+            || git -C "$gdir" fetch -q --depth 1 origin "$grev" 2>/dev/null \
+            || git -C "$gdir" fetch --depth 1 origin "$grev"; then
+            :
+        else
             gm=$(grammar_mirror "$gname")
             [ -n "$gm" ] \
-                || { echo "final: helix grammar $gname unfetchable ($gurl) and no mirror" >&2; exit 1; }
-            git -C "$gdir" fetch -q --depth 1 "$gm" "$grev"
+                || { echo "final: helix grammar $gname unfetchable ($gurl @ $grev) and no mirror" >&2; exit 1; }
+            git -C "$gdir" fetch --depth 1 "$gm" "$grev" \
+                || { echo "final: helix grammar $gname mirror unfetchable ($gm @ $grev)" >&2; exit 1; }
             echo "ingot: helix grammar $gname fetched from mirror $gm (recorded deviation)" >&2
         fi
         git -C "$gdir" checkout -q "$grev"
