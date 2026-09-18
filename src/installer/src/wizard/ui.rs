@@ -120,10 +120,17 @@ impl Ui {
         Vec::new()
     }
 
+    /// The review gate: the strict-parse diagnostics plus the
+    /// engine's own read-only plan diagnostics (the engine rejects
+    /// what it cannot do - e.g. luks2 in v1 - and the user sees
+    /// that here, not at the plan).
     fn enter_review(&mut self) {
         self.errors = match self.draft.config() {
-            Ok(_) => Vec::new(),
             Err(e) => e,
+            Ok(cfg) => match engine::plan(cfg) {
+                Ok(_) => Vec::new(),
+                Err(e) => vec![e],
+            },
         };
     }
 

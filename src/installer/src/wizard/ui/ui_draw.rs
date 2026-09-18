@@ -331,7 +331,7 @@ fn review_lines(ui: &Ui, w: usize, out: &mut Vec<Line<'static>>) {
     if ui.errors.is_empty() {
         out.push(Line::default());
         out.push(Line::from(Span::styled(
-            "  validation: no errors (the engine's strict parser)",
+            "  validation: no errors (strict parse + engine plan)",
             green(),
         )));
     } else {
