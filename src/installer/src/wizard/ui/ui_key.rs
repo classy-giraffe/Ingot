@@ -257,24 +257,31 @@ impl Ui {
     }
 
     fn add_row(&mut self) {
+        // Insert after the selected row; on an empty list (or past
+        // the end) that is the empty list itself - clamped so the
+        // cursor lands on the new row.
+        let at = |len: usize, sel: usize| (sel + 1).min(len);
         match self.step {
             Step::Users => {
+                let i = at(self.draft.users.len(), self.sel);
                 self.draft.users.insert(
-                    self.sel + 1,
+                    i,
                     wizard::DraftUser {
                         name: String::new(),
                         shell: String::new(),
                     },
                 );
-                self.sel += 1;
+                self.sel = i;
             }
             Step::Ssh => {
-                self.draft.ssh_keys.insert(self.sel + 1, String::new());
-                self.sel += 1;
+                let i = at(self.draft.ssh_keys.len(), self.sel);
+                self.draft.ssh_keys.insert(i, String::new());
+                self.sel = i;
             }
             Step::Services => {
-                self.draft.services.insert(self.sel + 1, String::new());
-                self.sel += 1;
+                let i = at(self.draft.services.len(), self.sel);
+                self.draft.services.insert(i, String::new());
+                self.sel = i;
             }
             _ => {}
         }
@@ -355,5 +362,68 @@ impl Ui {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Ui;
+    use crate::wizard::Step;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    fn ui() -> Ui {
+        Ui::new(PathBuf::from("/tmp/t.toml"), PathBuf::from("/tmp/w"), false)
+    }
+    fn press(ui: &mut Ui, code: KeyCode) {
+        ui.key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+    /// Walk the steps forward to the given screen.
+    fn to(ui: &mut Ui, step: Step) {
+        while ui.step != step {
+            press(ui, KeyCode::Enter);
+        }
+    }
+
+    // The Ssh and Services screens start empty: Insert must add a row
+    // without panicking (Vec::insert past the end) and leave the
+    // cursor on the new row.
+    #[test]
+    fn insert_on_empty_lists() {
+        let mut ui = ui();
+        to(&mut ui, Step::Ssh);
+        assert!(ui.draft.ssh_keys.is_empty());
+        press(&mut ui, KeyCode::Insert);
+        assert_eq!(ui.draft.ssh_keys, [String::new()]);
+        assert_eq!(ui.sel, 0);
+
+        to(&mut ui, Step::Services);
+        assert!(ui.draft.services.is_empty());
+        press(&mut ui, KeyCode::Insert);
+        assert_eq!(ui.draft.services, [String::new()]);
+        assert_eq!(ui.sel, 0);
+    }
+
+    // Users starts with one user: deleting it all and adding again
+    // must not panic either.
+    #[test]
+    fn insert_after_deleting_all_users() {
+        let mut ui = ui();
+        to(&mut ui, Step::Users);
+        press(&mut ui, KeyCode::Delete);
+        assert!(ui.draft.users.is_empty());
+        press(&mut ui, KeyCode::Insert);
+        assert_eq!(ui.draft.users.len(), 1);
+        assert_eq!(ui.sel, 0);
+    }
+
+    // Inserting mid-list lands the cursor on the new row.
+    #[test]
+    fn insert_after_selected_row() {
+        let mut ui = ui();
+        to(&mut ui, Step::Users);
+        press(&mut ui, KeyCode::Insert); // after the (single) default user
+        assert_eq!(ui.draft.users.len(), 2);
+        assert_eq!(ui.sel, 1);
     }
 }
