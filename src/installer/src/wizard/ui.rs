@@ -64,6 +64,10 @@ struct Ui {
     /// The engine's plan report, or the plan's error.
     plan: Result<String, String>,
     config_out: PathBuf,
+    /// True once the wizard wrote the config file itself: later
+    /// review passes re-write it instead of refusing an existing
+    /// file (a file the user pointed --config at is never touched).
+    config_written: bool,
     work: PathBuf,
     dry_run: bool,
     result: Option<Outcome>,
@@ -83,6 +87,7 @@ impl Ui {
             errors: Vec::new(),
             plan: Err(String::new()),
             config_out,
+            config_written: false,
             work,
             dry_run,
             result: None,
@@ -133,7 +138,7 @@ impl Ui {
             }
         };
         let text = config::render(&cfg);
-        if self.config_out.exists() {
+        if self.config_out.exists() && !self.config_written {
             self.plan = Err(format!(
                 "config {} already exists; remove it or choose another --config path",
                 self.config_out.display()
@@ -142,7 +147,10 @@ impl Ui {
             return;
         }
         match std::fs::write(&self.config_out, &text) {
-            Ok(()) => self.plan_from_file(),
+            Ok(()) => {
+                self.config_written = true;
+                self.plan_from_file();
+            }
             Err(e) => {
                 self.plan = Err(format!(
                     "cannot write config {}: {e}",
