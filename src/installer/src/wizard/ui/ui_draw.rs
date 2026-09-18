@@ -413,7 +413,7 @@ fn done_lines(ui: &Ui, out: &mut Vec<Line<'static>>) {
     out.push(Line::from(format!("  config: {}", ui.config_out.display())));
     out.push(Line::from(format!(
         "  log:    {} (copied to the target's /var/lib/ingot/install.log)",
-        ui.work.join("install.log").display()
+        ui.log_name()
     )));
 }
 

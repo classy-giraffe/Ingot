@@ -140,119 +140,66 @@ impl Ui {
         }
     }
 
-    fn append(&mut self, c: char) {
+    /// The editable string under the cursor (the selected row's
+    /// field, or the selected scalar), or None where the position is
+    /// not editable: the fixed slot filesystem, the left/right
+    /// cycled encryption choice, or the review screen.
+    fn field(&mut self) -> Option<&mut String> {
         match self.step {
-            Step::Target => self.draft.target_disk.push(c),
+            Step::Target => Some(&mut self.draft.target_disk),
             Step::Source => match self.sel {
-                0 => {
-                    self.draft.source_base.push(c);
-                    self.draft.refresh_version();
-                }
-                1 => self.draft.version.push(c),
-                _ => {}
+                0 => Some(&mut self.draft.source_base),
+                1 => Some(&mut self.draft.version),
+                _ => None,
             },
             Step::System => match self.sel {
-                0 => self.draft.hostname.push(c),
-                1 => self.draft.timezone.push(c),
-                2 => self.draft.locale.push(c),
-                _ => self.draft.keymap.push(c),
+                0 => Some(&mut self.draft.hostname),
+                1 => Some(&mut self.draft.timezone),
+                2 => Some(&mut self.draft.locale),
+                _ => Some(&mut self.draft.keymap),
             },
             Step::Partitions => match self.sel {
-                0 => self.draft.esp.push(c),
-                1 => self.draft.slot_a.push(c),
-                2 => self.draft.slot_b.push(c),
-                3 => self.draft.var.push(c),
-                _ => self.draft.home.push(c),
+                0 => Some(&mut self.draft.esp),
+                1 => Some(&mut self.draft.slot_a),
+                2 => Some(&mut self.draft.slot_b),
+                3 => Some(&mut self.draft.var),
+                _ => Some(&mut self.draft.home),
             },
             Step::Users => {
-                if let Some(u) = self.draft.users.get_mut(self.sel) {
-                    if self.sub == 0 {
-                        u.name.push(c)
-                    } else {
-                        u.shell.push(c)
-                    }
+                let u = self.draft.users.get_mut(self.sel)?;
+                if self.sub == 0 {
+                    Some(&mut u.name)
+                } else {
+                    Some(&mut u.shell)
                 }
             }
-            Step::Ssh => {
-                if let Some(k) = self.draft.ssh_keys.get_mut(self.sel) {
-                    k.push(c)
-                }
-            }
-            Step::Services => {
-                if let Some(u) = self.draft.services.get_mut(self.sel) {
-                    u.push(c)
-                }
-            }
-            _ => {}
+            Step::Ssh => self.draft.ssh_keys.get_mut(self.sel),
+            Step::Services => self.draft.services.get_mut(self.sel),
+            _ => None,
+        }
+    }
+
+    /// True while the cursor is on the source-base row: the version
+    /// is re-derived from the base after every edit there.
+    fn editing_base(&self) -> bool {
+        self.step == Step::Source && self.sel == 0
+    }
+
+    fn append(&mut self, c: char) {
+        if let Some(f) = self.field() {
+            f.push(c);
+        }
+        if self.editing_base() {
+            self.draft.refresh_version();
         }
     }
 
     fn backspace(&mut self) {
-        match self.step {
-            Step::Target => {
-                self.draft.target_disk.pop();
-            }
-            Step::Source => match self.sel {
-                0 => {
-                    self.draft.source_base.pop();
-                    self.draft.refresh_version();
-                }
-                1 => {
-                    self.draft.version.pop();
-                }
-                _ => {}
-            },
-            Step::System => match self.sel {
-                0 => {
-                    self.draft.hostname.pop();
-                }
-                1 => {
-                    self.draft.timezone.pop();
-                }
-                2 => {
-                    self.draft.locale.pop();
-                }
-                _ => {
-                    self.draft.keymap.pop();
-                }
-            },
-            Step::Partitions => match self.sel {
-                0 => {
-                    self.draft.esp.pop();
-                }
-                1 => {
-                    self.draft.slot_a.pop();
-                }
-                2 => {
-                    self.draft.slot_b.pop();
-                }
-                3 => {
-                    self.draft.var.pop();
-                }
-                _ => {
-                    self.draft.home.pop();
-                }
-            },
-            Step::Users => {
-                if let Some(u) = self.draft.users.get_mut(self.sel) {
-                    if self.sub == 0 {
-                        u.name.pop();
-                    } else {
-                        u.shell.pop();
-                    }
-                }
-            }
-            Step::Ssh => {
-                if let Some(k) = self.draft.ssh_keys.get_mut(self.sel) {
-                    k.pop();
-                }
-            }
-            Step::Services => {
-                if let Some(u) = self.draft.services.get_mut(self.sel) {
-                    u.pop();
-                }
-            }
-            _ => {}
+        if let Some(f) = self.field() {
+            f.pop();
+        }
+        if self.editing_base() {
+            self.draft.refresh_version();
         }
     }
 

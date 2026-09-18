@@ -43,7 +43,6 @@ enum Screen {
     Done,
 }
 
-
 /// The wizard's mutable state.
 struct Ui {
     draft: Draft,
@@ -94,6 +93,12 @@ impl Ui {
         }
     }
 
+    /// The engine's install log in the working directory (spec
+    /// 11.6.4: a persistent, retrievable log of what ran).
+    fn log_name(&self) -> String {
+        self.work.join("install.log").display().to_string()
+    }
+
     fn rows(&self) -> usize {
         match self.step {
             Step::Target => 1,
@@ -112,12 +117,10 @@ impl Ui {
     /// The engine's diagnostics filtered to the current step's
     /// category (the review sees all of them).
     fn step_errors(&self) -> Vec<String> {
-        let Ok(cfg) = self.draft.config() else {
-            let all = self.draft.config().unwrap_err();
-            return filter_errors(all, self.step);
-        };
-        let _ = cfg;
-        Vec::new()
+        match self.draft.config() {
+            Ok(_) => Vec::new(),
+            Err(all) => filter_errors(all, self.step),
+        }
     }
 
     /// The review gate: the strict-parse diagnostics plus the
@@ -207,7 +210,7 @@ impl Ui {
         // The screen cannot redraw while the engine runs: note it.
         self.flash = Some(format!(
             "installing... (the engine is running; log: {})",
-            self.work.join("install.log").display()
+            self.log_name()
         ));
         match engine::run(cfg, &self.work) {
             Ok(()) => {
@@ -305,7 +308,7 @@ fn done_text(ui: &Ui) -> String {
     s.push_str(&format!("  config: {}\n", ui.config_out.display()));
     s.push_str(&format!(
         "  log: {} (copied to the target's /var/lib/ingot/install.log)\n",
-        ui.work.join("install.log").display()
+        ui.log_name()
     ));
     s
 }
