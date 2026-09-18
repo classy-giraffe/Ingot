@@ -26,7 +26,7 @@ use crate::layout::{self, Layout};
 use crate::log::InstallLog;
 use crate::repart;
 use crate::size::human;
-use crate::source::{self, Artifact};
+use crate::source::{self, Artifact, LiveSource};
 use crate::target::{self, DiskTarget};
 use crate::ukify;
 
@@ -35,13 +35,62 @@ use crate::ukify;
 pub struct Plan {
     pub cfg: Config,
     pub layout: Layout,
-    pub artifacts: Vec<Artifact>,
-    /// Parallel to `artifacts`: the sha256 from the sidecar when one
-    /// was present and verified, else `None`.
-    pub checksums: Vec<Option<String>>,
+    /// The payload source, per the config's [source] mode.
+    pub source: PlanSource,
     pub disk_bytes: u64,
     /// The target's disk format ("qcow2", "raw", or "block device").
     pub disk_format: String,
+}
+
+/// The payload source a plan deploys.
+#[derive(Debug)]
+pub enum PlanSource {
+    /// Prebuilt whole-image artifact set (11.4.2).
+    Artifacts {
+        artifacts: Vec<Artifact>,
+        /// Parallel to `artifacts`: the sha256 from the sidecar when
+        /// one was present and verified, else `None`.
+        checksums: Vec<Option<String>>,
+    },
+    /// The running release on a mounted ISO media (spec 10.2).
+    Live(LiveSource),
+}
+
+impl PlanSource {
+    /// The artifact of one kind (artifacts mode; complete set).
+    fn artifact(&self, kind: &str) -> Option<&Artifact> {
+        match self {
+            PlanSource::Artifacts { artifacts, .. } => artifacts.iter().find(|a| a.kind == kind),
+            PlanSource::Live(_) => None,
+        }
+    }
+
+    /// The artifact set (artifacts mode).
+    fn artifacts(&self) -> &[Artifact] {
+        match self {
+            PlanSource::Artifacts { artifacts, .. } => artifacts,
+            PlanSource::Live(_) => &[],
+        }
+    }
+
+    /// The parallel checksum list (artifacts mode).
+    fn checksums(&self) -> &[Option<String>] {
+        match self {
+            PlanSource::Artifacts { checksums, .. } => checksums,
+            PlanSource::Live(_) => &[],
+        }
+    }
+
+    /// The UKI the boot phase verifies against (artifacts: the
+    /// `efi` artifact; live: the media's installed UKI).
+    fn uki(&self) -> &Path {
+        match self {
+            PlanSource::Artifacts { artifacts, .. } => {
+                &artifacts.iter().find(|a| a.kind == "efi").unwrap().path
+            }
+            PlanSource::Live(live) => &live.uki,
+        }
+    }
 }
 
 /// Disk size without touching the disk: read-only.
@@ -77,8 +126,42 @@ fn plan_cfg_encrypted(cfg: &Config) -> bool {
         || cfg.enc_home == crate::config::Encryption::Luks2
 }
 
-/// The read-only validation + plan.
+/// The read-only validation + plan. Live source mode resolves the
+/// release version from the running system's os-release (the running
+/// release is the source release).
 pub fn plan(cfg: Config) -> Result<Plan, String> {
+    plan_with(cfg, None)
+}
+
+/// Validates that `path` points to a UKI carrying `version` and the
+/// fixed slot A and var PARTUUIDs.
+fn validate_uki(path: &Path, version: &crate::version::Version) -> Result<(), String> {
+    let bytes = fs::read(path)
+        .map_err(|e| format!("cannot read UKI {}: {e}", path.display()))?;
+    ukify::validate_uki(
+        &bytes,
+        &version.to_string(),
+        layout::SLOT_A_UUID,
+        layout::VAR_UUID,
+    )
+    .map_err(|e| format!("UKI validation failed: {e}"))?;
+    Ok(())
+}
+
+/// The plan with an explicit live-source version (the testable half
+/// of [`plan`]: live mode normally derives the version from the
+/// running os-release, which tests cannot control).
+pub(crate) fn plan_with(
+    mut cfg: Config,
+    live_version: Option<crate::version::Version>,
+) -> Result<Plan, String> {
+    if cfg.source_mode == crate::config::SourceMode::Live {
+        let version = live_version
+            .or_else(|| source::running_version().ok())
+            .ok_or_else(|| "live source: cannot determine the running release version".to_string())?;
+        cfg.version = version;
+    }
+
     let layout = layout::compute(&cfg);
 
     // v1 is unencrypted: the config parser accepts the category, the
@@ -91,27 +174,30 @@ pub fn plan(cfg: Config) -> Result<Plan, String> {
     layout::check_disk(&layout, disk_bytes)?;
 
     let base = PathBuf::from(&cfg.source_base);
-    let artifacts = source::resolve(&base, &cfg.version)?;
-    let mut checksums = Vec::with_capacity(artifacts.len());
-    for a in &artifacts {
-        checksums.push(a.check_sha256()?);
-    }
-    // UKI: the fixed PARTUUIDs and the version must be baked in.
-    let uki = artifacts
-        .iter()
-        .find(|a| a.kind == "efi")
-        .expect("artifact set always contains the efi");
-    let bytes = fs::read(&uki.path)
-        .map_err(|e| format!("cannot read UKI artifact {}: {e}", uki.path.display()))?;
-    let version_str = cfg.version.to_string();
-    ukify::validate_uki(&bytes, &version_str, layout::SLOT_A_UUID, layout::VAR_UUID)
-        .map_err(|e| format!("UKI validation failed: {e}"))?;
+    let source = match cfg.source_mode {
+        crate::config::SourceMode::Artifacts => {
+            let artifacts = source::resolve(&base, &cfg.version)?;
+            let mut checksums = Vec::with_capacity(artifacts.len());
+            for a in &artifacts {
+                checksums.push(a.check_sha256()?);
+            }
+            PlanSource::Artifacts {
+                artifacts,
+                checksums,
+            }
+        }
+        crate::config::SourceMode::Live => {
+            let live = source::resolve_live(&base, &cfg.version)?;
+            PlanSource::Live(live)
+        }
+    };
+
+    validate_uki(source.uki(), &cfg.version)?;
 
     Ok(Plan {
         cfg,
         layout,
-        checksums,
-        artifacts,
+        source,
         disk_bytes,
         disk_format,
     })
@@ -146,28 +232,53 @@ pub fn render_report(plan: &Plan) -> String {
         human(plan.layout.used_bytes),
         human(plan.layout.required_disk_bytes)
     ));
-    s.push_str("Deployment:\n");
-    for (kind, part, what) in [
-        ("slot.raw", "slot A", "active version image"),
-        ("esp.raw", "esp", "systemd-boot + UKI"),
-        ("var.raw", "var", "factory state"),
-        ("home.raw", "home", "factory state"),
-    ] {
-        let art = plan
-            .artifacts
-            .iter()
-            .find(|a| a.kind == kind)
-            .expect("artifact set is complete");
-        s.push_str(&format!(
-            "  ingot_{v}.{kind} ({} bytes) -> {part} ({what})\n",
-            human(art.size)
-        ));
-    }
-    s.push_str("  slot B stays _empty (unformatted; an update fills it)\n\n");
-    s.push_str("Artifacts (sha256 from .sha256 sidecars when present):\n");
-    for (a, sum) in plan.artifacts.iter().zip(&plan.checksums) {
-        let sum = sum.clone().unwrap_or_else(|| "- (no sidecar)".to_string());
-        s.push_str(&format!("  ingot_{v}.{}  {sum}\n", a.kind));
+    match &plan.source {
+        PlanSource::Artifacts { .. } => {
+            s.push_str("Deployment:\n");
+            for (kind, part, what) in [
+                ("slot.raw", "slot A", "active version image"),
+                ("esp.raw", "esp", "systemd-boot + UKI"),
+                ("var.raw", "var", "factory state"),
+                ("home.raw", "home", "factory state"),
+            ] {
+                let art = plan.source.artifact(kind).unwrap();
+                s.push_str(&format!(
+                    "  ingot_{v}.{kind} ({} bytes) -> {part} ({what})\n",
+                    human(art.size)
+                ));
+            }
+            s.push_str("  slot B stays _empty (unformatted; an update fills it)\n\n");
+            s.push_str("Artifacts (sha256 from .sha256 sidecars when present):\n");
+            for (a, sum) in plan.source.artifacts().iter().zip(plan.source.checksums()) {
+                let sum = sum.clone().unwrap_or_else(|| "- (no sidecar)".to_string());
+                s.push_str(&format!("  ingot_{v}.{}  {sum}\n", a.kind));
+            }
+        }
+        PlanSource::Live(live) => {
+            s.push_str("Deployment (live source: the running release on the live ISO):\n");
+            let erofs_size = live
+                .erofs
+                .metadata()
+                .map(|m| m.len())
+                .unwrap_or(0);
+            s.push_str(&format!(
+                "  {} ({} bytes) -> slot A (the running release's payload)\n",
+                live.erofs.display(),
+                human(erofs_size)
+            ));
+            s.push_str(&format!(
+                "  {} (ESP tree: systemd-boot + UKI + loader) -> esp\n",
+                live.esp_tree.display()
+            ));
+            s.push_str("  var, home: formatted in place (repart); factory state is empty\n");
+            s.push_str("  slot B stays _empty (unformatted; an update fills it)\n\n");
+            s.push_str("Live source (sha256 of the media's files):\n");
+            s.push_str(&format!("  LiveOS/rootfs.erofs  {}\n", live.erofs_sha));
+            s.push_str(&format!(
+                "  esp/EFI/Linux/ingot_{v}.efi  {}\n",
+                live.uki_sha
+            ));
+        }
     }
     s.push_str(&format!(
         "\nUKI ingot_{v}.efi: valid (VERSION_ID {v}, fixed PARTUUIDs in command line)\n"
@@ -234,8 +345,11 @@ pub fn run(cfg: Config, work: &Path) -> Result<(), String> {
 
     // 11.5 phase 1: the required tools must be available before any
     // byte is written (layout::mkfs_set skips the unformatted slot).
-    let mkfs = layout::mkfs_set(&plan.layout);
-    let missing = missing_tools(&std::env::var("PATH").unwrap_or_default(), &mkfs);
+    let mut extra = layout::mkfs_set(&plan.layout);
+    if plan.disk_format == "qcow2" {
+        extra.push("qemu-img".to_string());
+    }
+    let missing = missing_tools(&std::env::var("PATH").unwrap_or_default(), &extra);
     if !missing.is_empty() {
         return Err(format!(
             "required tools not found in PATH: {} (install the packages that provide them and retry)",
@@ -306,19 +420,16 @@ fn is_mounted(path: &Path) -> bool {
 /// The subprocesses the engine drives (11.5 phase 1: availability
 /// checked before the first write). The mkfs binaries are added per
 /// layout in `run`; `bootctl` is absent (best-effort at runtime).
-const TOOLS: [&str; 10] = [
+const TOOLS: [&str; 8] = [
     "systemd-repart",
     "dd",
     "losetup",
-    "partprobe",
-    "qemu-img",
     "blkid",
     "mount",
     "umount",
     "sync",
     "df",
 ];
-
 /// Names from `TOOLS` plus `extra` with no executable found in
 /// `PATH`. A plain PATH scan: no subprocess, unit-testable.
 fn missing_tools(path_var: &str, extra: &[String]) -> Vec<String> {
@@ -381,22 +492,35 @@ fn run_phases(
     // 2. partition devices (slot B is looked up for the record only)
     let parts = partition_devices(plan, target, log, var_mount)?;
 
-    // 3. whole-image deployment
-    deploy::deploy(&plan.artifacts, &parts, log)?;
+    // 3. payload deployment: whole-image artifacts, or the live
+    //    source (the running release's erofs + the media's ESP tree).
+    //    Live mode mounts the ESP early: composing the tree needs a
+    //    mount point (the phase-4 mount step then reuses it).
+    let mut esp_mount: Option<PathBuf> = None;
+    match &plan.source {
+        PlanSource::Artifacts { .. } => {
+            deploy::deploy(&plan.source.artifacts()[..], &parts, log)?;
+        }
+        PlanSource::Live(live) => {
+            let esp_dev = parts
+                .get("esp.raw")
+                .expect("layout always contains the ESP")
+                .clone();
+            esp_mount = Some(target.mount(&esp_dev, "vfat", work, "")?);
+            let esp_m = esp_mount.as_ref().unwrap();
+            deploy::deploy_live(live, &parts, esp_m, log)?;
+        }
+    }
 
     // 4. mounts for content initialization
-    let (var_m, home_m, esp_m, slot_m) = mount_for_init(plan, target, &parts, work, var_mount)?;
+    let (var_m, home_m, esp_m, slot_m) =
+        mount_for_init(plan, target, &parts, work, var_mount, &mut esp_mount)?;
 
     // 5. /var/lib/etc from factory defaults + config
     etcinit::run(&plan.cfg, &var_m, &home_m, &slot_m, log)?;
 
     // 6. ESP / UKI verification
-    let uki = plan
-        .artifacts
-        .iter()
-        .find(|a| a.kind == "efi")
-        .expect("artifact set always contains the efi");
-    boot::verify(&esp_m, uki, v, log)?;
+    boot::verify(&esp_m, plan.source.uki(), v, log)?;
 
     // 7. finalize
     log.log_result(
@@ -463,12 +587,15 @@ fn partition_devices(
 
 /// Phase 4: mount the partitions for content initialization: /var and
 /// /home read-write, the ESP read-write, the active slot read-only.
+/// The ESP is reused when `esp_mount` already holds it (live mode
+/// mounts it during deployment).
 fn mount_for_init(
     plan: &Plan,
     target: &mut DiskTarget,
     parts: &BTreeMap<&'static str, PathBuf>,
     work: &Path,
     var_mount: &mut Option<PathBuf>,
+    esp_mount: &mut Option<PathBuf>,
 ) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf), String> {
     // Look the filesystems up by role: the partition order is a
     // layout.rs invariant, not something the engine re-encodes.
@@ -490,7 +617,10 @@ fn mount_for_init(
     let var_m = target.mount(&var_dev, var_fs, work, "")?;
     *var_mount = Some(var_m.clone());
     let home_m = target.mount(&home_dev, home_fs, work, "")?;
-    let esp_m = target.mount(&esp_dev, "vfat", work, "")?;
+    let esp_m = match esp_mount.take() {
+        Some(m) => m,
+        None => target.mount(&esp_dev, "vfat", work, "")?,
+    };
     let slot_m = target.mount(&slot_dev, "erofs", work, "ro")?;
     Ok((var_m, home_m, esp_m, slot_m))
 }

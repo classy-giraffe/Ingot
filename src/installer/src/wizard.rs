@@ -194,6 +194,7 @@ impl Draft {
         };
         let cfg = crate::config::Config {
             target_disk: self.target_disk.clone(),
+            source_mode: crate::config::SourceMode::Artifacts,
             source_base: self.source_base.clone(),
             version,
             hostname: self.hostname.clone(),

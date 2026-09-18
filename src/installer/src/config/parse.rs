@@ -30,21 +30,60 @@ pub(super) fn parse_target(doc: &toml::Table, errs: &mut Vec<String>) -> String 
     target_disk
 }
 /// 11.4 category parse: source.
-pub(super) fn parse_source(doc: &toml::Table, errs: &mut Vec<String>) -> (String, Version) {
+///
+/// `mode` selects the payload source: `artifacts` (the default)
+/// deploys the prebuilt whole-image artifact set from `base` for the
+/// given `version`; `live` (spec 10.2) runs the installer on the live
+/// ISO, where `base` is the mounted ISO media carrying the running
+/// release's erofs (LiveOS/rootfs.erofs) and the release artifacts
+/// the install deploys (the installed UKI and the ESP tree under
+/// esp/). Live mode takes no `version`: the running release is the
+/// source release (the engine resolves it from the running
+/// os-release).
+pub(super) fn parse_source(
+    doc: &toml::Table,
+    errs: &mut Vec<String>,
+) -> (SourceMode, String, Version) {
     // 11.4.2 OS image source
-    let (source_base, version) = match doc.get("source") {
+    let (mode, source_base, version) = match doc.get("source") {
         None => {
-            errs.push("category '[source]' missing (required: base, version)".into());
-            (String::new(), Version::default())
+            errs.push(
+                "category '[source]' missing (required: base, version; or mode = \"live\")".into(),
+            );
+            (SourceMode::Artifacts, String::new(), Version::default())
         }
         Some(v) => match table(v, "source", errs) {
-            None => (String::new(), Version::default()),
+            None => (SourceMode::Artifacts, String::new(), Version::default()),
             Some(t) => {
-                unknown_keys(t, "source", &["base", "version"], errs);
+                unknown_keys(t, "source", &["mode", "base", "version"], errs);
+                let mode = match t.get("mode") {
+                    None => SourceMode::Artifacts,
+                    Some(toml::Value::String(s)) => match s.as_str() {
+                        "artifacts" => SourceMode::Artifacts,
+                        "live" => SourceMode::Live,
+                        other => {
+                            errs.push(format!(
+                                "[source] key 'mode' must be \"artifacts\" or \"live\" (got {other:?})"
+                            ));
+                            SourceMode::Artifacts
+                        }
+                    },
+                    Some(v) => {
+                        errs.push(format!("[source] key 'mode' must be a string ({v})"));
+                        SourceMode::Artifacts
+                    }
+                };
                 let base = str_key(t, "source", "base", errs);
                 let v = match t.get("version") {
+                    None if mode == SourceMode::Live => Version::default(),
                     None => {
                         errs.push("[source] key 'version' missing".into());
+                        Version::default()
+                    }
+                    Some(toml::Value::String(s)) if mode == SourceMode::Live => {
+                        errs.push(
+                            "[source] key 'version' is not allowed in live mode (the running release is the source release)".into(),
+                        );
                         Version::default()
                     }
                     Some(toml::Value::String(s)) => match version::parse(s.as_str()) {
@@ -59,11 +98,11 @@ pub(super) fn parse_source(doc: &toml::Table, errs: &mut Vec<String>) -> (String
                         Version::default()
                     }
                 };
-                (base, v)
+                (mode, base, v)
             }
         },
     };
-    (source_base, version)
+    (mode, source_base, version)
 }
 /// 11.4 category parse: system.
 pub(super) fn parse_system(

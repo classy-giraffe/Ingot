@@ -253,7 +253,6 @@ impl DiskTarget {
     pub fn partition_by_uuid(&self, uuid: &str, timeout_secs: u64) -> Result<PathBuf, String> {
         let name = self.sysfs_name();
         let base = format!("/sys/block/{name}");
-        let prefix = format!("{name}p");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
         loop {
             let entries = match fs::read_dir(&base) {
@@ -267,7 +266,11 @@ impl DiskTarget {
             };
             for e in entries.flatten() {
                 let n = e.file_name().to_string_lossy().to_string();
-                if !n.starts_with(&prefix) {
+                let Some(rest) = n.strip_prefix(&name) else {
+                    continue;
+                };
+                let rest = rest.strip_prefix('p').unwrap_or(rest);
+                if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()) {
                     continue;
                 }
                 let dev = format!("/dev/{n}");

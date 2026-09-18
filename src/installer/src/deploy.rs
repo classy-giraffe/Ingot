@@ -8,13 +8,14 @@
 //! dd'ed (the ESP image already carries it); `boot.rs` re-checks it.
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use sha2::Digest;
 
 use crate::log::InstallLog;
-use crate::source::Artifact;
+use crate::source::{Artifact, LiveSource};
 
 /// Deploys one artifact onto a partition, then verifies the written
 /// bytes by hashing the first `art.size` bytes of the device and
@@ -99,4 +100,71 @@ pub fn deploy(
         place(art.kind, art, dev, log)?;
     }
     Ok(())
+}
+/// Live-source deployment (spec 10.2): the running release's erofs is
+/// `dd`'d onto slot A (hash-verified, like the artifact slot image),
+/// and the media's `esp/` tree (systemd-boot fallback, the installed
+/// UKI, the loader config) is copied onto the already-formatted ESP.
+/// The state partitions (var, home) are left as repart formatted them
+/// (btrfs/ext4, per the config): the factory state is empty, and
+/// etcinit initializes them from the slot's factory defaults.
+pub fn deploy_live(
+    src: &LiveSource,
+    parts: &std::collections::BTreeMap<&'static str, PathBuf>,
+    esp_mount: &Path,
+    log: &InstallLog,
+) -> Result<(), String> {
+    // Slot A: the running release's erofs payload.
+    let dev = parts
+        .get("slot.raw")
+        .ok_or_else(|| "no partition device for the slot (live deploy)".to_string())?;
+    let meta = fs::metadata(&src.erofs)
+        .map_err(|e| format!("cannot stat live payload {}: {e}", src.erofs.display()))?;
+    let art = Artifact {
+        kind: "slot.raw",
+        path: src.erofs.clone(),
+        size: meta.len(),
+    };
+    place("slot A (live payload)", &art, dev, log)?;
+
+    // ESP: the media's installed-ESP tree onto the formatted ESP.
+    copy_tree(&src.esp_tree, esp_mount)
+        .map_err(|e| format!("cannot compose the ESP from {}: {e}", src.esp_tree.display()))?;
+    log.log_result(
+        "deploy",
+        "esp-composed",
+        Some(format!(
+            "{} -> {} (systemd-boot + UKI + loader)",
+            src.esp_tree.display(),
+            esp_mount.display()
+        )),
+    )?;
+    Ok(())
+}
+
+/// Recursively copies `src` into `dst` (files and directories),
+/// preserving permissions and modes. Symlinks are copied as their
+/// target contents (the ESP tree carries no symlinks; the live payload
+/// is erofs, not copied tree-by-tree).
+fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
+    let meta = fs::symlink_metadata(src)
+        .map_err(|e| format!("cannot read {}: {e}", src.display()))?;
+    if meta.is_dir() {
+        fs::create_dir_all(dst)
+            .map_err(|e| format!("cannot create {}: {e}", dst.display()))?;
+        fs::set_permissions(dst, fs::Permissions::from_mode(meta.permissions().mode()))
+            .map_err(|e| format!("cannot chmod {}: {e}", dst.display()))?;
+        for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            copy_tree(entry.path().as_path(), &dst.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        fs::create_dir_all(dst.parent().unwrap_or(dst))
+            .map_err(|e| format!("cannot create parent of {}: {e}", dst.display()))?;
+        fs::copy(src, dst)
+            .map_err(|e| format!("cannot copy {} -> {}: {e}", src.display(), dst.display()))?;
+        fs::set_permissions(dst, fs::Permissions::from_mode(meta.permissions().mode()))
+            .map_err(|e| format!("cannot chmod {}: {e}", dst.display()))
+    }
 }

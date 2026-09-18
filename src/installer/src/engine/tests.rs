@@ -97,8 +97,10 @@ fn report_covers_partitions_and_deploys() {
     let plan = Plan {
         cfg,
         layout,
-        artifacts,
-        checksums: vec![None, None, None, None, None],
+        source: PlanSource::Artifacts {
+            artifacts,
+            checksums: vec![None, None, None, None, None],
+        },
         disk_bytes: 29 * (1 << 30),
         disk_format: "qcow2".to_string(),
     };
@@ -148,5 +150,130 @@ fn plan_rejects_missing_artifacts() {
     cfg.target_disk = disk.to_string_lossy().to_string();
     let e = plan(cfg).unwrap_err();
     assert!(e.contains("artifact not found"), "{e}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A minimal synthetic PE (x86_64, zero optional header) with the
+/// sections validate_uki requires: the same fixture shape as the
+/// ukify tests.
+fn pe_uki() -> Vec<u8> {
+    const CMDLINE: &[u8] =
+        b"usr=PARTUUID=0066bfe5-47f1-52dc-9a16-1bb10191a1dc root=PARTUUID=501347aa-775a-5736-8da3-2a9977c820ec";
+    const OSREL: &[u8] = b"NAME=Ingot\nVERSION_ID=\"0.1.0\"\nID=ingot\n";
+    let sections = [(".cmdline", CMDLINE), (".osrel", OSREL)];
+    let header_end = 0x58 + 40 * sections.len();
+    let mut out = vec![0u8; header_end];
+    out[0] = b'M';
+    out[1] = b'Z';
+    out[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
+    out[0x40..0x44].copy_from_slice(b"PE\0\0");
+    out[0x44..0x46].copy_from_slice(&0x8664u16.to_le_bytes());
+    out[0x46..0x48].copy_from_slice(&(sections.len() as u16).to_le_bytes());
+    let mut data_off = header_end;
+    for (i, (name, data)) in sections.iter().enumerate() {
+        let s = 0x58 + 40 * i;
+        let name_bytes: Vec<u8> = name.bytes().take(8).collect();
+        out[s..s + name_bytes.len()].copy_from_slice(&name_bytes);
+        out[s + 16..s + 20].copy_from_slice(&(data.len() as u32).to_le_bytes());
+        out[s + 20..s + 24].copy_from_slice(&(data_off as u32).to_le_bytes());
+        data_off += data.len();
+    }
+    for (_, data) in sections.iter() {
+        out.extend_from_slice(data);
+    }
+    out
+}
+
+/// A live media fixture: the live payload erofs plus the installed
+/// ESP tree (a synthetic UKI with the fixed PARTUUIDs).
+fn live_media(dir: &std::path::Path) {
+    let erofs = dir.join(crate::source::LIVE_EROFS);
+    fs::create_dir_all(erofs.parent().unwrap()).unwrap();
+    fs::write(&erofs, b"erofs").unwrap();
+    let uki = dir.join("esp/EFI/Linux/ingot_0.1.0.efi");
+    fs::create_dir_all(uki.parent().unwrap()).unwrap();
+    fs::write(&uki, pe_uki()).unwrap();
+    fs::create_dir_all(dir.join("esp/loader")).unwrap();
+    fs::write(dir.join("esp/loader/loader.conf"), "timeout 3\n").unwrap();
+    fs::create_dir_all(dir.join("esp/EFI/BOOT")).unwrap();
+    fs::write(dir.join("esp/EFI/BOOT/BOOTX64.EFI"), b"boot").unwrap();
+}
+
+#[test]
+fn live_plan_resolves_media_source() {
+    let dir = std::env::temp_dir().join(format!("ingot-live-plan-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    let media = dir.join("media");
+    live_media(&media);
+    let disk = dir.join("target.raw");
+    let f = fs::File::create(&disk).unwrap();
+    f.set_len(30 * (1 << 30)).unwrap();
+    drop(f);
+
+    let mut cfg = sample_cfg();
+    cfg.source_mode = crate::config::SourceMode::Live;
+    cfg.source_base = media.to_string_lossy().to_string();
+    cfg.target_disk = disk.to_string_lossy().to_string();
+    let plan = plan_with(cfg, Some(crate::version::parse("0.1.0").unwrap()))
+        .unwrap();
+    match &plan.source {
+        PlanSource::Live(live) => {
+            assert_eq!(live.erofs, media.join(crate::source::LIVE_EROFS));
+            assert_eq!(live.uki, media.join("esp/EFI/Linux/ingot_0.1.0.efi"));
+        }
+        other => panic!("expected a live plan source, got {other:?}"),
+    }
+    assert_eq!(plan.layout.version, crate::version::parse("0.1.0").unwrap());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn live_plan_names_missing_media_files() {
+    let dir = std::env::temp_dir().join(format!("ingot-live-missing-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    let media = dir.join("media");
+    live_media(&media);
+    fs::remove_file(media.join(crate::source::LIVE_EROFS)).unwrap();
+    let disk = dir.join("target.raw");
+    let f = fs::File::create(&disk).unwrap();
+    f.set_len(30 * (1 << 30)).unwrap();
+    drop(f);
+
+    let mut cfg = sample_cfg();
+    cfg.source_mode = crate::config::SourceMode::Live;
+    cfg.source_base = media.to_string_lossy().to_string();
+    cfg.target_disk = disk.to_string_lossy().to_string();
+    let e = plan_with(cfg, Some(crate::version::parse("0.1.0").unwrap())).unwrap_err();
+    assert!(e.contains(crate::source::LIVE_EROFS), "{e}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn live_report_covers_media_deploy() {
+    let dir = std::env::temp_dir().join(format!("ingot-live-report-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    let media = dir.join("media");
+    live_media(&media);
+    let disk = dir.join("target.raw");
+    let f = fs::File::create(&disk).unwrap();
+    f.set_len(30 * (1 << 30)).unwrap();
+    drop(f);
+
+    let mut cfg = sample_cfg();
+    cfg.source_mode = crate::config::SourceMode::Live;
+    cfg.source_base = media.to_string_lossy().to_string();
+    cfg.target_disk = disk.to_string_lossy().to_string();
+    let plan = plan_with(cfg, Some(crate::version::parse("0.1.0").unwrap()))
+        .unwrap();
+    let report = render_report(&plan);
+    for needle in [
+        "live source: the running release on the live ISO",
+        "LiveOS/rootfs.erofs",
+        "ESP tree: systemd-boot + UKI + loader",
+        "Live source (sha256 of the media's files)",
+        "format: raw",
+    ] {
+        assert!(report.contains(needle), "report missing {needle:?}\n{report}");
+    }
     let _ = fs::remove_dir_all(&dir);
 }

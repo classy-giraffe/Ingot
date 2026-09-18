@@ -101,6 +101,71 @@ fn valid_config_parses() {
     assert_eq!(c.users[0].name, "tommy");
     assert_eq!(c.services.len(), 0);
 }
+#[test]
+fn explicit_artifacts_mode_parses() {
+    let doc = valid().replace(
+        "[source]\nbase = \"dist\"\nversion = \"0.1.0\"\n",
+        "[source]\nmode = \"artifacts\"\nbase = \"dist\"\nversion = \"0.1.0\"\n",
+    );
+    let c = parse(&doc).unwrap();
+    assert!(matches!(c.source_mode, SourceMode::Artifacts));
+    assert_eq!(c.source_base, "dist");
+    assert_eq!(c.version, version::parse("0.1.0").unwrap());
+}
+
+#[test]
+fn live_mode_parses_without_version() {
+    let doc = valid().replace(
+        "[source]\nbase = \"dist\"\nversion = \"0.1.0\"\n",
+        "[source]\nmode = \"live\"\nbase = \"/media/ingot-iso\"\n",
+    );
+    let c = parse(&doc).unwrap();
+    assert!(matches!(c.source_mode, SourceMode::Live));
+    assert_eq!(c.source_base, "/media/ingot-iso");
+}
+
+#[test]
+fn live_mode_rejects_version() {
+    let doc = valid().replace(
+        "[source]\nbase = \"dist\"\nversion = \"0.1.0\"\n",
+        "[source]\nmode = \"live\"\nbase = \"/media/ingot-iso\"\nversion = \"0.1.0\"\n",
+    );
+    let errs = parse(&doc).unwrap_err();
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("[source]") && e.contains("version") && e.contains("live")),
+        "expected a live-mode version diagnostic, got {errs:?}"
+    );
+}
+
+#[test]
+fn live_mode_requires_base() {
+    let doc = valid().replace(
+        "[source]\nbase = \"dist\"\nversion = \"0.1.0\"\n",
+        "[source]\nmode = \"live\"\n",
+    );
+    let errs = parse(&doc).unwrap_err();
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("[source]") && e.contains("base")),
+        "expected a missing-base diagnostic, got {errs:?}"
+    );
+}
+
+#[test]
+fn bad_source_mode_fails_named() {
+    let doc = valid().replace(
+        "[source]\nbase = \"dist\"\nversion = \"0.1.0\"\n",
+        "[source]\nmode = \"usb\"\nbase = \"dist\"\nversion = \"0.1.0\"\n",
+    );
+    let errs = parse(&doc).unwrap_err();
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("[source]") && e.contains("mode") && e.contains("usb")),
+        "expected a bad-mode diagnostic, got {errs:?}"
+    );
+}
+
 
 #[test]
 fn every_missing_category_fails_named() {

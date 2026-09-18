@@ -31,8 +31,8 @@ pub fn validate(line: &str) -> Result<(), String> {
     let (key_type, rest) = line
         .split_once(' ')
         .ok_or("expected '<type> <base64> [comment]'")?;
-    let (b64, _comment) = match rest.rfind(' ') {
-        Some(i) => (&rest[..i], &rest[i + 1..]),
+    let (b64, _comment) = match rest.split_once(' ') {
+        Some((b, c)) => (b, c),
         None => (rest, ""),
     };
     if key_type.is_empty() || !KEY_TYPES.contains(&key_type) {

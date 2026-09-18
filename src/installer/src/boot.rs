@@ -12,15 +12,15 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::log::InstallLog;
-use crate::source::Artifact;
 use crate::version::Version;
 
 /// Verifies the deployed ESP: the UKI is present at the expected
-/// path with the exact artifact bytes, and `bootctl status` (if the
-/// host has it) sees the ESP.
+/// path with the exact bytes of the source UKI (`uki_src`: the
+/// release artifact in artifacts mode, the media's installed UKI in
+/// live mode), and `bootctl status` (if the host has it) sees the ESP.
 pub fn verify(
     esp_mount: &Path,
-    uki: &Artifact,
+    uki_src: &Path,
     version: &Version,
     log: &InstallLog,
 ) -> Result<(), String> {
@@ -32,12 +32,12 @@ pub fn verify(
         ));
     }
     let on_disk = fs::read(&uki_path).map_err(|e| format!("cannot read deployed UKI: {e}"))?;
-    let expected = fs::read(&uki.path).map_err(|e| format!("cannot read UKI artifact: {e}"))?;
+    let expected = fs::read(uki_src).map_err(|e| format!("cannot read UKI source: {e}"))?;
     if on_disk != expected {
         return Err(format!(
             "deployed UKI {} does not match the release artifact {} (bytes differ)",
             uki_path.display(),
-            uki.path.display()
+            uki_src.display()
         ));
     }
     log.log_result(
