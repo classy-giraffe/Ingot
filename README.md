@@ -24,6 +24,12 @@ the slot erofs (zstd), and btrfs state partitions -> QEMU/OVMF Secure
 Boot harness. The erofs slot and the UKI are also emitted as standalone
 split artifacts.
 
+The Rust userland (brush, nushell, helix, zellij, uutils coreutils)
+is pinned upstream source in the repo: git submodules under
+`thirdparty/`, one per component, checked out at the upstream commit
+recorded in `tools/pins.json` (the pin check enforces it). After
+cloning: `git submodule update --init --depth 1`.
+
 ```sh
 # 1. (optional) archive the pinned compose for offline rebuilds:
 tools/archive-compose.sh
@@ -43,14 +49,15 @@ just test                        # host-side unit tests (no VM)
 ```
 
 `dist/build-metadata-<v>.json` records the per-version build inputs
-(compose ID, kernel version, brush SHA) and the erofs parameters (spec
-20.4).
+(compose ID, kernel version, the Rust userland pins) and the erofs
+parameters (spec 20.4).
 
 - `tools/` - build orchestration, compose mirroring, pins, snakeoil keys
 - `image/` - mkosi project: the single main image (whole-system disk
   output) with its phase scripts, the 99ingot dracut module and factory
   defaults (`files/`), and the fixed-UUID repart baselines
-  (`repart-baseline/`)
+- `thirdparty/` - git submodules: the pinned upstream Rust userland
+  sources (one submodule per component, at the pinned commit)
 - `harness/` - QEMU/OVMF boot harness with machine-readable assertions:
   the T1 boot gate (probe and prod modes) and the T2 A/B scenario
 - `dist/` - build artifacts (git-ignored)

@@ -10,7 +10,7 @@
     "brush": {
       "repo": "https://github.com/reubeno/brush",
       "tag": "brush-v0.4.0",
-      "sha": "a2886cc09c88947a1bdab5900919c673ae29287f"
+      "sha": "96a26d0c66cbc018a1517e9562944418fef5b272"
     },
     "nushell": {
       "repo": "https://github.com/nushell/nushell",
