@@ -108,6 +108,38 @@ pub fn resolve(base: &Path, version: &Version) -> Result<Vec<Artifact>, String> 
     Ok(out)
 }
 
+/// The Ingot versions with a slot artifact present under `base`,
+/// newest first. The wizard's default version source; entries that
+/// are not regular files or do not name a version are skipped.
+pub fn available_versions(base: &Path) -> Vec<Version> {
+    let Ok(rd) = fs::read_dir(base) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for e in rd.flatten() {
+        let file_name = e.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        let Some(v) = name
+            .strip_prefix("ingot_")
+            .and_then(|rest| rest.strip_suffix(".slot.raw"))
+        else {
+            continue;
+        };
+        let Ok(m) = e.metadata() else {
+            continue;
+        };
+        if m.is_file() {
+            if let Ok(v) = crate::version::parse(v) {
+                out.push(v);
+            }
+        }
+    }
+    out.sort_by(|a, b| b.cmp(a));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +171,30 @@ mod tests {
         fs::remove_file(d.join("ingot_0.1.0.esp.raw")).unwrap();
         let e = resolve(&d, &v).unwrap_err();
         assert!(e.contains("esp.raw"), "{e}");
+        let _ = fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn available_versions_lists_slot_releases_newest_first() {
+        let d = tmp("versions");
+        for v in ["0.1.0", "0.2.0", "1.9.0", "1.10.0"] {
+            fs::write(d.join(format!("ingot_{v}.slot.raw")), b"x").unwrap();
+        }
+        // Not a slot artifact, not a file, or not a version: ignored.
+        fs::write(d.join("ingot_0.3.0.efi"), b"x").unwrap();
+        fs::write(d.join("ingot_9.9.9.usr-x86-64.raw"), b"x").unwrap();
+        fs::write(d.join("ingot_notaversion.slot.raw"), b"x").unwrap();
+        fs::create_dir(d.join("ingot_2.0.0.slot.raw")).unwrap();
+        let vs = available_versions(&d);
+        assert_eq!(
+            vs,
+            vec![
+                Version { major: 1, minor: 10, patch: 0 },
+                Version { major: 1, minor: 9, patch: 0 },
+                Version { major: 0, minor: 2, patch: 0 },
+                Version { major: 0, minor: 1, patch: 0 },
+            ]
+        );
+        assert!(available_versions(&d.join("no-such-dir")).is_empty());
         let _ = fs::remove_dir_all(&d);
     }
 

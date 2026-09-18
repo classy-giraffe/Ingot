@@ -272,3 +272,79 @@ fn all_diagnostics_are_collected() {
     assert!(errs.iter().any(|e| e.contains("hostname")), "{errs:?}");
     assert!(errs.iter().any(|e| e.contains("esp")), "{errs:?}");
 }
+
+// --- render: the wizard's output path ---
+
+#[test]
+fn render_matches_canonical_literal() {
+    let cfg = parse(&valid()).unwrap();
+    let expected = r#"schema = 1
+
+[target]
+disk = "/dev/vda"
+
+[source]
+base = "dist"
+version = "0.1.0"
+
+[system]
+hostname = "ingot"
+timezone = "UTC"
+locale = "C.UTF-8"
+keymap = "us"
+
+[partitions]
+esp = "1G"
+slot_a = "8G"
+slot_b = "8G"
+var = "4G"
+home = "8G"
+
+[filesystems]
+slot = "erofs"
+var = "btrfs"
+home = "btrfs"
+
+[encryption]
+var = "none"
+home = "none"
+
+[[users]]
+name = "tommy"
+shell = "/usr/bin/brush"
+
+[ssh]
+authorized_keys = []
+
+[services]
+enabled = []
+"#;
+    assert_eq!(render(&cfg), expected);
+}
+
+#[test]
+fn render_round_trips_through_the_strict_parser() {
+    let base = parse(&valid()).unwrap();
+    assert_eq!(parse(&render(&base)).unwrap(), base);
+
+    // Variants that exercise the non-default branches: ext4 state,
+    // luks2 (accepted at parse; the engine's validation phase
+    // rejects it in v1), two users (the second without a shell),
+    // a MiB-only size (no exact GiB), an ssh key whose comment
+    // needs quote escaping, a service, and a target path with an
+    // embedded double quote.
+    let mut c = base.clone();
+    c.target_disk = r#"/tmp/di"sk.qcow2"#.to_string();
+    c.fs_var = StateFs::Ext4;
+    c.enc_home = Encryption::Luks2;
+    c.home = ByteSize(1536 << 20);
+    c.users.push(User {
+        name: "ada".into(),
+        shell: None,
+    });
+    c.ssh_keys
+        .push("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF1aBsIu1m9uoJkCke9zOtv1hJwZG3pHe4PMYdgPQ+Bb \"quoted\"".into());
+    c.services.push("sshd.service".into());
+    let rt = parse(&render(&c)).unwrap();
+    assert_eq!(rt, c);
+}
