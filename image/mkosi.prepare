@@ -1,20 +1,22 @@
 #!/bin/sh
 # Main image prepare script. Runs in two phases:
 #   - arg "final": after OS package install (no build overlay): fetch
-#     the pinned brush and nushell sources and stage the in-repo Rust
-#     workspace (src/) into the artifacts directory (consumed by the build
-#     script; not part of the image payload) and set the machine
-#     identity in the image root.
+#     the pinned Rust userland sources (brush, nushell, helix, zellij,
+#     coreutils/uutils) - including the helix tree-sitter grammar
+#     repositories pinned in the helix source - and stage the in-repo
+#     Rust workspace (src/) into the artifacts directory (consumed by
+#     the build script; not part of the image payload), and set the
+#     machine identity in the image root.
 #   - arg "build": prime the cargo registry (crates.io, with network)
-#     for both Rust builds - the pinned brush build and the in-repo
-#     workspace build - which the build script (chroot, no network)
-#     runs --offline against that cache.
+#     for all the Rust builds - the pinned userland builds and the
+#     in-repo workspace build - which the build script (chroot, no
+#     network) runs --offline against that cache.
 #
 # Host-side script (no .chroot): network + host tools available.
 # $BUILDROOT is the image root; $ARTIFACTDIR is a per-image scratch
-# directory that never ends up in the image. $BRUSH_SHA is passed via
-# [Content] Environment= (checked against tools/pins.json by
-# tools/check-pins.py).
+# directory that never ends up in the image. The *_SHA variables are
+# passed via [Content] Environment= (checked against tools/pins.json
+# by tools/check-pins.py).
 set -eu
 
 # mkosi sanitizes the environment for host-side scripts; make the rustup
@@ -58,6 +60,104 @@ final)
     cp -a "$src" "$ARTIFACTDIR/nushell-source"
     echo "ingot: nushell source ${NUSHELL_SHA} staged at /work/artifacts/nushell-source" >&2
 
+    # --- pinned helix source into the artifacts dir (not the
+    #     payload): the terminal editor (spec 7.2), pinned upstream
+    #     commit like brush/nushell
+    : "${HELIX_SHA:?HELIX_SHA must be set (image/mkosi.conf)}"
+    curl -fL --retry 3 "https://github.com/helix-editor/helix/archive/${HELIX_SHA}.tar.gz" \
+        -o "$work/helix.tar.gz"
+    tar -C "$work" -xzf "$work/helix.tar.gz"
+    src=$(find "$work" -mindepth 1 -maxdepth 1 -type d -name "helix-*" | head -n 1)
+    [ -n "$src" ] || { echo "helix source tree not found" >&2; exit 1; }
+    [ -f "$src/Cargo.toml" ] || { echo "helix source has no Cargo.toml" >&2; exit 1; }
+    rm -rf "$ARTIFACTDIR/helix-source"
+    cp -a "$src" "$ARTIFACTDIR/helix-source"
+    echo "ingot: helix source ${HELIX_SHA} staged at /work/artifacts/helix-source" >&2
+
+    # --- helix tree-sitter grammar sources into the staged helix tree
+    #     (not the payload): the helix build script (helix-term/build.rs)
+    #     fetches and compiles the grammars pinned in the staged
+    #     source's languages.toml (one git repository + revision per
+    #     grammar). Prefetch them here with the exact operations the
+    #     loader performs (git init / remote add / fetch --depth 1 <rev>
+    #     / checkout <rev>): in the chroot build the loader then finds
+    #     the remote and revision already matching and skips the fetch
+    #     ("GitUpToDate"), so the offline build needs no grammar
+    #     network. The grammar revisions are pinned by the helix source
+    #     itself, so no extra pin is required.
+    #     Mirror fallback (recorded deviation): the gotmpl grammar's
+    #     original repository was deleted upstream after the helix pin;
+    #     the pinned commit is carried unchanged (same commit SHA) by
+    #     the fork below.
+    helix_root="$ARTIFACTDIR/helix-source"
+    mkdir -p "$helix_root/runtime/grammars/sources"
+    awk '/^\[\[grammar\]\]/{blk=1; name=""}
+         blk && /^name = /{name=$3; gsub(/"/, "", name)}
+         blk && /source = \{ git = /{
+             match($0, /git = "[^"]*"/); url=substr($0, RSTART+7, RLENGTH-8)
+             match($0, /rev = "[^"]*"/); rev=substr($0, RSTART+7, RLENGTH-8)
+             print name "\t" url "\t" rev
+             blk=0
+         }' "$helix_root/languages.toml" > "$work/helix-grammars.tsv"
+    [ -s "$work/helix-grammars.tsv" ] \
+        || { echo "final: helix grammar list empty ($helix_root/languages.toml?)" >&2; exit 1; }
+    grammar_mirror() {
+        case "$1" in
+            gotmpl) echo "https://github.com/ngalaiko/tree-sitter-go-template" ;;
+            *) echo "" ;;
+        esac
+    }
+    gtab=$(printf '\t')
+    while IFS="$gtab" read -r gname gurl grev; do
+        gdir="$helix_root/runtime/grammars/sources/$gname"
+        rm -rf "$gdir"
+        mkdir -p "$gdir"
+        git -C "$gdir" init -q
+        # origin must carry the configured URL: the chroot loader
+        # compares the remote against languages.toml before deciding a
+        # fetch is needed.
+        git -C "$gdir" remote add origin "$gurl"
+        if ! git -C "$gdir" fetch -q --depth 1 origin "$grev" 2>/dev/null; then
+            gm=$(grammar_mirror "$gname")
+            [ -n "$gm" ] \
+                || { echo "final: helix grammar $gname unfetchable ($gurl) and no mirror" >&2; exit 1; }
+            git -C "$gdir" fetch -q --depth 1 "$gm" "$grev"
+            echo "ingot: helix grammar $gname fetched from mirror $gm (recorded deviation)" >&2
+        fi
+        git -C "$gdir" checkout -q "$grev"
+    done < "$work/helix-grammars.tsv"
+    echo "ingot: $(wc -l < "$work/helix-grammars.tsv") helix grammar sources staged under /work/artifacts/helix-source/runtime/grammars/sources" >&2
+
+    # --- pinned zellij source into the artifacts dir (not the
+    #     payload): the terminal multiplexer (spec 7.2). The default
+    #     plugins ship as pre-built wasm committed in the source tree
+    #     (zellij-utils/assets/plugins/), which a release build embeds
+    #     directly - no wasm toolchain needed.
+    : "${ZELLIJ_SHA:?ZELLIJ_SHA must be set (image/mkosi.conf)}"
+    curl -fL --retry 3 "https://github.com/zellij-org/zellij/archive/${ZELLIJ_SHA}.tar.gz" \
+        -o "$work/zellij.tar.gz"
+    tar -C "$work" -xzf "$work/zellij.tar.gz"
+    src=$(find "$work" -mindepth 1 -maxdepth 1 -type d -name "zellij-*" | head -n 1)
+    [ -n "$src" ] || { echo "zellij source tree not found" >&2; exit 1; }
+    [ -f "$src/Cargo.toml" ] || { echo "zellij source has no Cargo.toml" >&2; exit 1; }
+    rm -rf "$ARTIFACTDIR/zellij-source"
+    cp -a "$src" "$ARTIFACTDIR/zellij-source"
+    echo "ingot: zellij source ${ZELLIJ_SHA} staged at /work/artifacts/zellij-source" >&2
+
+    # --- pinned coreutils (uutils) source into the artifacts dir (not
+    #     the payload): the core CLI utilities (spec 7.2), built with
+    #     the feat_os_unix feature set (the full *nix utility set).
+    : "${COREUTILS_SHA:?COREUTILS_SHA must be set (image/mkosi.conf)}"
+    curl -fL --retry 3 "https://github.com/uutils/coreutils/archive/${COREUTILS_SHA}.tar.gz" \
+        -o "$work/coreutils.tar.gz"
+    tar -C "$work" -xzf "$work/coreutils.tar.gz"
+    src=$(find "$work" -mindepth 1 -maxdepth 1 -type d -name "coreutils-*" | head -n 1)
+    [ -n "$src" ] || { echo "coreutils source tree not found" >&2; exit 1; }
+    [ -f "$src/Cargo.toml" ] || { echo "coreutils source has no Cargo.toml" >&2; exit 1; }
+    rm -rf "$ARTIFACTDIR/coreutils-source"
+    cp -a "$src" "$ARTIFACTDIR/coreutils-source"
+    echo "ingot: coreutils source ${COREUTILS_SHA} staged at /work/artifacts/coreutils-source" >&2
+
     # --- Ingot workspace source (src/ in the repo) into the artifacts
     #     dir (not the payload): the in-repo Rust workspace (spec 7.1:
     #     installer + update-helper) is staged like the pinned brush
@@ -93,11 +193,12 @@ EOF
 
 build)
     # Prime the cargo registry (index + crate sources) for the pinned
-    # brush and nushell builds and the in-repo workspace build, using the image's
-    # network access (prepare scripts always run with network). The
-    # cache lands in the artifacts dir, which the build script (chroot,
-    # no network by default) reuses with --offline: the build itself is
-    # hermetic - pinned compose, pinned source, pinned crate versions
+    # Rust userland builds (brush, nushell, helix, zellij, coreutils)
+    # and the in-repo workspace build, using the image's network access
+    # (prepare scripts always run with network). The cache lands in the
+    # artifacts dir, which the build script (chroot, no network by
+    # default) reuses with --offline: the build itself is hermetic -
+    # pinned compose, pinned source, pinned crate versions
     # (Cargo.lock, --locked/--offline).
     : "${BRUSH_SHA:?BRUSH_SHA must be set (image/mkosi.conf)}"
     [ -d "$ARTIFACTDIR/brush-source" ] \
@@ -112,6 +213,18 @@ build)
         || { echo "build: nushell source missing (run the final phase first)" >&2; exit 1; }
     mkosi-chroot env CARGO_HOME=/work/artifacts/cargo-home HOME=/ \
         cargo fetch --locked --manifest-path /work/artifacts/nushell-source/Cargo.toml
+    [ -d "$ARTIFACTDIR/helix-source" ] \
+        || { echo "build: helix source missing (run the final phase first)" >&2; exit 1; }
+    mkosi-chroot env CARGO_HOME=/work/artifacts/cargo-home HOME=/ \
+        cargo fetch --locked --manifest-path /work/artifacts/helix-source/Cargo.toml
+    [ -d "$ARTIFACTDIR/zellij-source" ] \
+        || { echo "build: zellij source missing (run the final phase first)" >&2; exit 1; }
+    mkosi-chroot env CARGO_HOME=/work/artifacts/cargo-home HOME=/ \
+        cargo fetch --locked --manifest-path /work/artifacts/zellij-source/Cargo.toml
+    [ -d "$ARTIFACTDIR/coreutils-source" ] \
+        || { echo "build: coreutils source missing (run the final phase first)" >&2; exit 1; }
+    mkosi-chroot env CARGO_HOME=/work/artifacts/cargo-home HOME=/ \
+        cargo fetch --locked --manifest-path /work/artifacts/coreutils-source/Cargo.toml
     echo "ingot: cargo registry primed at /work/artifacts/cargo-home" >&2
     ;;
 
