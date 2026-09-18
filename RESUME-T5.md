@@ -56,15 +56,24 @@ A/B harness, engine conventions).
 ## Design decisions (locked during T5)
 
 - **Single execution path (spec 11.3).** Wizard flow: collect ->
-  review (strict-parse diagnostics gate) -> write config file ->
-  `engine::plan` computed from the written file -> confirm screen
-  (type 'yes', 11.6.2) -> `engine::run` on that file. The
-  confirmation screen shows the engine's own plan report.
+  review (strict-parse + engine-plan diagnostics gate) -> write
+  config file -> `engine::plan` computed from the written file ->
+  confirm screen (type 'yes', 11.6.2) -> `engine::run` on that
+  file. The confirmation screen shows the engine's own plan
+  report.
+- **The review gate is the engine's validation.** It runs the
+  strict parser *and* the engine's read-only plan, so the user sees
+  the engine's own rejections (luks2 in v1, an undersized disk, a
+  missing source artifact) at the review - before any file is
+  written - not at the plan.
 - **Confirmation is explicit everywhere.** Esc on any step screen
   prompts once (y/n) before aborting; esc on the confirmation
   screen also prompts (it was a silent exit - the abort must be a
   deliberate act). Abort = exit 130, target untouched (the engine's
-  working-copy model guarantees untouched-on-failure as well).
+  working-copy model guarantees untouched-on-failure as well). The
+  wizard re-writes its own config file when the user goes plan ->
+  review -> plan again; a file the user pointed --config at is
+  never overwritten.
 - **Key input: arrows + Insert/Delete only.** j/k/a/x were removed:
   they intercept printable characters that belong to field input
   (typing a hostname with k would be eaten as movement). Row
@@ -93,22 +102,43 @@ A/B harness, engine conventions).
   right now both toggle (a6a6476).
 - j/k/a/x key interception and the silent esc-at-confirmation
   (7ced127).
-- pty escape-sequence pairing in the E2E driver (arrow keys must
-  not be split across writes) - harness side, not product.
+- `add_row` panicked on an empty row list: the Ssh and Services
+  screens start empty, and inserting at sel + 1 past the end of the
+  vec crashed the TUI (skipping the terminal restore). The insert
+  index is clamped to the list length (c9f0597, with headless
+  key-handler regression tests in ui/ui_key.rs).
+- After any plan failure, going back to the review and advancing
+  again dead-ended on "config already exists" - the wizard's own
+  written file blocked the fix loop. The wizard now re-writes its
+  own config on later review passes; a user-supplied --config file
+  still refuses the overwrite (269e6f7).
+- The review gate ran only the strict parser, so a config the
+  engine would refuse (luks2 in v1, undersized disk, missing
+  artifact) passed review with "no errors" and was only rejected
+  at the plan. The review now also runs the engine's read-only plan
+  and shows its diagnostics (ea5997f).
+- Standards-axis cleanups: append/backspace collapsed onto one
+  field() selector, step_errors runs the gate once, the install-log
+  path has one accessor (ba3a8d4).
+- pty escape-sequence pairing in the E2E driver (arrow keys and
+  esc must not be split or run together across writes) - harness
+  side, not product.
 - install.log lives at /var/lib/ingot/install.log on the installed
   system (the var partition mounts at /var), not /var/install.log
   - harness-side path fix.
 
 ## Verification
 
-- Unit: 66 tests (60 crate + 6 cli) green, including the wizard
+- Unit: 69 tests (63 crate + 6 cli) green, including the wizard
   state-machine tests (navigation, field editing, row add/remove,
-  review gate, abort, dry-run) and the config render round-trip
-  (render -> strict parse -> identical config).
-- E2E: harness/wizard.py 20/20 (see above).
-- Manual pty smoke: version auto-fill, cycling to ext4/luks2
-  (written config carries fs var = "ext4", enc var = "luks2"),
-  abort paths.
+  review gate, abort, dry-run), the headless key-handler tests
+  (insert on empty lists, insert-after-selected), and the config
+  render round-trip (render -> strict parse -> identical config).
+- E2E: harness/wizard.py 20/20, re-run after every fix batch.
+- Manual pty smoke: version auto-fill, cycling to ext4 (written
+  config carries fs var = "ext4"), luks2 rejected at the review
+  gate with the engine's own diagnostic, the plan -> review -> plan
+  rewrite loop, and the abort paths.
 
 ## Conventions kept
 
