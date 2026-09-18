@@ -160,6 +160,16 @@ sh_path=$(readlink -f /bin/sh 2>/dev/null || echo unknown)
 # T3: the update helper is present in the slot and executable
 helper_ok=0
 /usr/bin/ingot-update-helper --help >/dev/null 2>&1 && helper_ok=1
+# T10: the admin userland (issue #21). Criterion 10: nushell is the
+# default interactive shell - it must run headless from the slot. The
+# editor and the multiplexer must launch without error (--version).
+nu_ok=0
+nu_out=$(/usr/bin/nushell -c "print 'ok'" 2>/dev/null | head -n 1)
+[ "$nu_out" = "ok" ] && nu_ok=1
+helix_ok=0
+/usr/bin/helix --version >/dev/null 2>&1 && helix_ok=1
+zellij_ok=0
+/usr/bin/zellij --version >/dev/null 2>&1 && zellij_ok=1
 
 doc=$(printf '{
   "kernel": "%s",
@@ -181,6 +191,9 @@ doc=$(printf '{
   "journal_err": "%s",
   "sh": "%s",
   "helper_ok": %s,
+  "nu_ok": %s,
+  "helix_ok": %s,
+  "zellij_ok": %s,
   "microcode_rev": "%s"
 }' \
     "$(jesc "$kernel")" \
@@ -208,6 +221,9 @@ doc=$(printf '{
     "$(jesc "$journal_err")" \
     "$(jesc "$sh_path")" \
     "$helper_ok" \
+    "$nu_ok" \
+    "$helix_ok" \
+    "$zellij_ok" \
     "$(jesc "$microcode_rev")")
 
 printf '%s\n' "$doc" > "$out"

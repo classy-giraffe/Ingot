@@ -262,8 +262,19 @@ def t1_checks(p, ev, esp_state):
     add("journal_clean", journal_err.strip() == "" and failed == "",
         f"failed_units={failed!r} journal_err={journal_err[:400]!r}")
 
-    # 7. brush is /bin/sh and system units started under it
+    # 7. brush is /bin/sh and system units started under it - the
+    #    24.1 shell-compat smoke (spec 25.9, criterion 9)
     add("brush_sh", p.get("sh") == "/usr/bin/brush", f"sh={p.get('sh')!r}")
+    # 7b. criterion 10 (spec 25.10): nushell is the default
+    #     interactive shell - the slot's nushell ran headless from
+    #     the probe
+    add("nushell_default_shell", p.get("nu_ok") == 1,
+        f"nu_ok={p.get('nu_ok')!r}")
+    # 7c. T10 (issue #21): the editor and the multiplexer are in the
+    #     slot and launch without error
+    add("admin_userland",
+        p.get("helix_ok") == 1 and p.get("zellij_ok") == 1,
+        f"helix_ok={p.get('helix_ok')!r} zellij_ok={p.get('zellij_ok')!r}")
 
     # 8. the booted slot is the pinned release (slot-baked os-release)
     add("slot_version", p.get("version") == PINS_VERSION,

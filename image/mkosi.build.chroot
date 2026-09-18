@@ -24,6 +24,23 @@ export PKG_CONFIG=/usr/bin/x86_64-redhat-linux-gnu-pkg-config
 # bindings with bindgen (needs libclang, absent from the slot image);
 # the committed pregenerated bindings (from the pinned nettle3.10-devel
 # headers) are used instead.
+# selinux-sys (uutils' chcon/runcon) generates its bindings with
+# bindgen, which drives libclang. libclang locates its builtin
+# headers (stddef.h & co) in a "resource dir" derived from the
+# library's load location; rawhide's clang-libs layout (libclang in
+# /usr/lib64, builtin headers in /usr/lib/clang/<major>/include via
+# clang-resource-filesystem) does not satisfy that lookup, so the
+# parse dies with "stddef.h file not found". Pin the resource dir
+# explicitly (bindgen appends these to every clang invocation).
+CLANG_RESOURCE_DIR=
+for d in /usr/lib/clang/*/include; do
+    [ -f "$d/stddef.h" ] || continue
+    CLANG_RESOURCE_DIR=${d%/include}
+    break
+done
+[ -n "$CLANG_RESOURCE_DIR" ] \
+    || { echo "build: libclang resource dir (clang-resource-filesystem) not found" >&2; exit 1; }
+export BINDGEN_EXTRA_CLANG_ARGS="-resource-dir $CLANG_RESOURCE_DIR"
 export NETTLE_PREGENERATED_BINDINGS=/usr/src/ingot/update-helper/build/nettle-bindings.rs
 : "${BRUSH_SHA:?BRUSH_SHA must be set (image/mkosi.conf)}"
 [ -d /work/artifacts/brush-source ] \
@@ -65,6 +82,81 @@ install -D -m 0755 /usr/src/nushell/target/release/nu "$DESTDIR/usr/bin/nu"
 # user shell references /usr/bin/nushell)
 ln -sf nu "$DESTDIR/usr/bin/nushell"
 echo "ingot: nushell ${NUSHELL_SHA} built and staged to /usr/bin/nu (+ /usr/bin/nushell)" >&2
+
+# --- helix: the terminal editor (spec 7.2). Same discipline as
+# brush/nushell: pinned upstream source, primed registry, offline
+# --locked build, installed via $DESTDIR. The build script
+# (helix-term/build.rs) fetches and compiles the tree-sitter grammars
+# pinned in the source's languages.toml: the prepare phase pre-staged
+# the grammar repositories at the exact remote + revision, so the
+# fetch is a no-op here (the loader reports them up to date) and the
+# compilation runs offline against the chroot's gcc.
+: "${HELIX_SHA:?HELIX_SHA must be set (image/mkosi.conf)}"
+[ -d /work/artifacts/helix-source ] \
+    || { echo "build: helix source missing at /work/artifacts/helix-source" >&2; exit 1; }
+rm -rf /usr/src/helix
+cp -a /work/artifacts/helix-source /usr/src/helix
+# The runtime lookup directory baked into the binary at build time
+# (helix's downstream-packager hook): the runtime files (queries,
+# themes, the compiled grammar libraries) install to /usr/share/helix.
+export HELIX_DEFAULT_RUNTIME=/usr/share/helix
+cargo build --release --locked --offline \
+    --manifest-path /usr/src/helix/Cargo.toml --bin hx
+install -D -m 0755 /usr/src/helix/target/release/hx "$DESTDIR/usr/bin/helix"
+# the editor's canonical name plus the upstream short name (the same
+# pattern as nu/nushell)
+ln -sf helix "$DESTDIR/usr/bin/hx"
+# The runtime tree: queries, themes, tutor, and the compiled
+# tree-sitter grammar libraries (runtime/grammars/*.so, built by the
+# build script above). The staged grammar source repositories are git
+# checkouts - build input only, stripped before the payload copy.
+rm -rf /usr/src/helix/runtime/grammars/sources
+mkdir -p "$DESTDIR/usr/share/helix"
+cp -a /usr/src/helix/runtime/. "$DESTDIR/usr/share/helix/"
+echo "ingot: helix ${HELIX_SHA} built and staged to /usr/bin/helix (+ /usr/bin/hx, runtime at /usr/share/helix)" >&2
+
+# --- zellij: the terminal multiplexer (spec 7.2). Same discipline:
+# pinned upstream source, primed registry, offline --locked build,
+# installed via $DESTDIR. The default plugins ship as pre-built wasm
+# committed in the source tree (zellij-utils/assets/plugins/); a
+# release build embeds them directly (no wasm toolchain needed). The
+# default vendored-curl feature builds OpenSSL from source (make +
+# perl in the build overlay) and links the system libcurl (runtime).
+: "${ZELLIJ_SHA:?ZELLIJ_SHA must be set (image/mkosi.conf)}"
+[ -d /work/artifacts/zellij-source ] \
+    || { echo "build: zellij source missing at /work/artifacts/zellij-source" >&2; exit 1; }
+rm -rf /usr/src/zellij
+cp -a /work/artifacts/zellij-source /usr/src/zellij
+cargo build --release --locked --offline \
+    --manifest-path /usr/src/zellij/Cargo.toml --bin zellij
+install -D -m 0755 /usr/src/zellij/target/release/zellij "$DESTDIR/usr/bin/zellij"
+echo "ingot: zellij ${ZELLIJ_SHA} built and staged to /usr/bin/zellij" >&2
+
+# --- coreutils (uutils): the core CLI utilities (spec 7.2). Same
+# discipline: pinned upstream source, primed registry, offline
+# --locked build, installed via $DESTDIR. feat_os_unix is the full
+# *nix utility set; each utility is a workspace crate with its own
+# binary (the root package only carries the multicall `coreutils`),
+# so build the workspace's bin targets. The built binaries shadow the
+# distro coreutils files in the final payload (mkosi copies $DESTDIR
+# over the installed packages; the distro package stays installed
+# because systemd, dracut, kernel-core and util-linux require it).
+: "${COREUTILS_SHA:?COREUTILS_SHA must be set (image/mkosi.conf)}"
+[ -d /work/artifacts/coreutils-source ] \
+    || { echo "build: coreutils source missing at /work/artifacts/coreutils-source" >&2; exit 1; }
+rm -rf /usr/src/coreutils
+cp -a /work/artifacts/coreutils-source /usr/src/coreutils
+cargo build --release --locked --offline --workspace --bins \
+    --features feat_os_unix \
+    --manifest-path /usr/src/coreutils/Cargo.toml
+# Every target/release/<name> without an extension is a utility
+# binary (the .d debuglink files and subdirectories are skipped).
+for bin in /usr/src/coreutils/target/release/*; do
+    [ -f "$bin" ] || continue
+    case "$bin" in *.*) continue ;; esac
+    install -D -m 0755 "$bin" "$DESTDIR/usr/bin/$(basename "$bin")"
+done
+echo "ingot: coreutils (uutils) ${COREUTILS_SHA} built and staged to /usr/bin/*" >&2
 
 # --- ingot-update-helper: the in-repo Rust workspace (spec 7.1). The
 # source was staged by the prepare script (final phase) at

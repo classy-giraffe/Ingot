@@ -96,19 +96,37 @@ check(
     f"conf={m.group(1) if m else None!r} expected={snapshot!r}",
 )
 
-m = re.search(r"^Environment=BRUSH_SHA=(\S+)$", mkosi_conf, re.M)
-check(
-    "brush pin (BRUSH_SHA)",
-    m is not None and m.group(1) == pins["rust"]["brush"]["sha"],
-    f"conf={m.group(1) if m else None!r} pins={pins['rust']['brush']['sha']!r}",
-)
-
-m = re.search(r"^Environment=NUSHELL_SHA=(\S+)$", mkosi_conf, re.M)
-check(
-    "nushell pin (NUSHELL_SHA)",
-    m is not None and m.group(1) == pins["rust"]["nushell"]["sha"],
-    f"conf={m.group(1) if m else None!r} pins={pins['rust']['nushell']['sha']!r}",
-)
+# Each Rust component pin: the mkosi.conf Environment=<NAME>_SHA= line
+# must carry the commit SHA recorded in tools/pins.json, the .gitmodules
+# entry must point at the pinned upstream repo, and the thirdparty/<name>
+# submodule must be initialized and checked out at exactly that commit
+# (the prepare phase stages that checkout; a fresh checkout needs
+# `git submodule update --init` first).
+gitmodules = (REPO / ".gitmodules").read_text()
+for name, spec in pins["rust"].items():
+    env_name = name.upper() + "_SHA"
+    m = re.search(rf"^Environment={env_name}=(\S+)$", mkosi_conf, re.M)
+    check(
+        f"{name} pin ({env_name})",
+        m is not None and m.group(1) == spec["sha"],
+        f"conf={m.group(1) if m else None!r} pins={spec['sha']!r}",
+    )
+    m = re.search(
+        rf'\[submodule "thirdparty/{name}"\](.*?)(?=^\[submodule|\Z)',
+        gitmodules, re.M | re.S,
+    )
+    url_m = re.search(r"^\s*url\s*=\s*(\S+)", m.group(1), re.M) if m else None
+    check(
+        f"{name} submodule (.gitmodules)",
+        url_m is not None and url_m.group(1) == spec["repo"],
+        f"url={url_m.group(1) if url_m else None!r} pins={spec['repo']!r}",
+    )
+    head = cmd_output("git", "-C", str(REPO / "thirdparty" / name), "rev-parse", "HEAD").strip()
+    check(
+        f"{name} submodule checkout (@ {spec['sha'][:12]})",
+        head == spec["sha"],
+        f"HEAD={head or 'uninitialized'!r} (run: git submodule update --init)",
+    )
 
 version = pins["image_version"]
 slot_a = (REPO / "image/repart-baseline/20-slot-a.conf").read_text()
