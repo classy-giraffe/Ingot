@@ -7,8 +7,9 @@
 #   just harness               T1 boot harness (probe injected into the
 #                              working disk's /var; deep invariants)
 #   just prod                  T1 gate, probe-free: host-side evidence only
-#   just ab                    T2 A/B selection + automatic rollback scenario
 #   just test                  host-side unittest suite (fast, no VM)
+#   just iso                   T6 live ISO E2E (issue #23, criteria
+#                              11/12): live boot + unattended install
 
 # Build the pinned release against the archived compose; extra args pass
 # through to tools/build.sh verbatim. The mkosi sandbox needs root on
@@ -47,3 +48,10 @@ test:
 # src/update-helper/tests/).
 rust-test:
 	cd src && cargo test
+
+# T6 live ISO E2E (issue #23, criteria 11/12): boots the ISO
+# headless (Secure Boot on) and asserts SSH + ephemerality, then runs
+# the unattended install against a declarative config disk and boots
+# the installed machine. Root (KVM, the config-disk loop mount).
+iso:
+	sudo python3 harness/iso.py
