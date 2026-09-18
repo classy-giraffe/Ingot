@@ -94,7 +94,12 @@ A/B harness).
 6. `--dry-run` qcow2: sha256 identical before/after.
 7. The 11.6.1 destructive warning is printed to stderr and logged
    before the first write (second review round).
-8. Workspace tests: 49 installer + 5 CLI + 16 update-helper
+8. The installed disk BOOTS: T1 harness pointed at the installer's
+   output (convert qcow2 -> raw first, work dir on the big disk -
+   /tmp is 31G tmpfs) - all 15 invariants PASS (UEFI Secure Boot
+   load of the signed UKI, erofs slot ro, btrfs /var + /etc bind,
+   clean multi-user, probe frame).
+9. Workspace tests: 49 installer + 5 CLI + 16 update-helper
    green.
 
 ## Resume procedure (T5+)
