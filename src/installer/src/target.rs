@@ -57,6 +57,77 @@ fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// A discovered block device on the host system.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredDisk {
+    pub path: PathBuf,
+    pub name: String,
+    pub size_bytes: u64,
+    pub read_only: bool,
+    pub model: String,
+}
+
+impl DiscoveredDisk {
+    pub fn size_human(&self) -> String {
+        let gb = self.size_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+        if gb >= 1.0 {
+            if gb.fract() < 0.05 {
+                format!("{:.0} GiB", gb)
+            } else {
+                format!("{:.1} GiB", gb)
+            }
+        } else {
+            let mb = self.size_bytes as f64 / (1024.0 * 1024.0);
+            format!("{:.0} MiB", mb)
+        }
+    }
+}
+/// Discovers candidate target block devices by inspecting `/sys/block`.
+/// Sorts writable disks first (largest to smallest), then read-only media.
+pub fn probe_disks() -> Vec<DiscoveredDisk> {
+    let mut disks = Vec::new();
+    let sys_block = Path::new("/sys/block");
+    let Ok(entries) = fs::read_dir(sys_block) else {
+        return disks;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with("loop")
+            || name.starts_with("ram")
+            || name.starts_with("dm-")
+            || name.starts_with("md")
+        {
+            continue;
+        }
+        let b = entry.path();
+        let ro = fs::read_to_string(b.join("ro"))
+            .map(|s| s.trim() == "1")
+            .unwrap_or(false);
+        let size_sectors: u64 = fs::read_to_string(b.join("size"))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        let model = fs::read_to_string(b.join("device/model"))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        let path = PathBuf::from(format!("/dev/{name}"));
+        disks.push(DiscoveredDisk {
+            path,
+            name,
+            size_bytes: size_sectors * 512,
+            read_only: ro,
+            model,
+        });
+    }
+    disks.sort_by(|a, b| {
+        a.read_only
+            .cmp(&b.read_only)
+            .then_with(|| b.size_bytes.cmp(&a.size_bytes))
+    });
+    disks
+}
+
 /// True when `path` names a block device (has a /sys/block entry).
 pub(crate) fn is_block_device(path: &Path) -> bool {
     match path.file_name() {

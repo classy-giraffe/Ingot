@@ -10,8 +10,8 @@ fn tmp(tag: &str) -> std::path::PathBuf {
 #[test]
 fn defaults_match_the_workstation_profile() {
     let d = Draft::new();
-    // The operator's only required inputs: target disk and source.
-    assert!(d.target_disk.is_empty());
+    // Target disk is auto-probed from /sys/block (starts with /dev/ or empty if none).
+    assert!(d.target_disk.is_empty() || d.target_disk.starts_with("/dev/"));
     assert_eq!(d.source_base, "dist");
     // The test runs with the crate directory as CWD, which carries
     // no dist/: no discoverable version.

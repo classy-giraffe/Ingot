@@ -124,14 +124,25 @@ impl Step {
 }
 
 impl Draft {
-    /// Sensible defaults (workstation profile): the operator must
-    /// still fill the target disk; the source defaults to `dist` in
-    /// the current directory with the newest available version.
+    /// Sensible defaults (workstation profile): auto-probes the
+    /// available disks (defaulting to the first writable target device);
+    /// auto-detects live media if booted from an ISO.
     pub fn new() -> Self {
-        let source_base = "dist".to_string();
+        let target_disk = crate::target::probe_disks()
+            .into_iter()
+            .find(|d| !d.read_only && d.size_bytes > 0)
+            .map(|d| d.path.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let live_media = Path::new("/media/ingot-iso");
+        let source_base = if live_media.join(crate::source::LIVE_EROFS).is_file() {
+            "/media/ingot-iso".to_string()
+        } else {
+            "dist".to_string()
+        };
         let version = source_version(&source_base);
         Self {
-            target_disk: String::new(),
+            target_disk,
             source_base,
             version,
             hostname: "ingot".into(),
@@ -192,9 +203,16 @@ impl Draft {
                 }
             }
         };
+        let is_live = Path::new(&self.source_base)
+            .join(crate::source::LIVE_EROFS)
+            .is_file();
         let cfg = crate::config::Config {
             target_disk: self.target_disk.clone(),
-            source_mode: crate::config::SourceMode::Artifacts,
+            source_mode: if is_live {
+                crate::config::SourceMode::Live
+            } else {
+                crate::config::SourceMode::Artifacts
+            },
             source_base: self.source_base.clone(),
             version,
             hostname: self.hostname.clone(),
@@ -238,7 +256,13 @@ impl Draft {
 /// The newest version with a slot artifact under `base` (relative
 /// paths resolve against the current directory), else empty.
 fn source_version(base: &str) -> String {
-    crate::source::available_versions(Path::new(base))
+    let p = Path::new(base);
+    if p.join(crate::source::LIVE_EROFS).is_file() {
+        return crate::source::running_version()
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+    }
+    crate::source::available_versions(p)
         .into_iter()
         .next()
         .map(|v| v.to_string())

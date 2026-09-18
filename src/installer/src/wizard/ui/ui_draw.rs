@@ -21,10 +21,18 @@ pub fn draw(terminal: &mut DefaultTerminal, ui: &mut Ui) -> io::Result<()> {
             Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).split(area);
         let (content, footer) = (areas[0], areas[1]);
         let (lines, cursor) = render_lines(ui, content.width as usize);
-        let para = Paragraph::new(lines).block(Block::bordered().title(Line::from(format!(
-            " Ingot installer - wizard: {}",
-            screen_title(ui)
-        ))));
+        let title_line = Line::from(vec![
+            Span::styled(" Ingot ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(" Installer ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("› ", Style::default().fg(Color::DarkGray)),
+            Span::styled(screen_title(ui), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+        ]);
+        let para = Paragraph::new(lines).block(
+            Block::bordered()
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(title_line),
+        );
         f.render_widget(para, content);
         let hint = ui.flash.clone().unwrap_or_else(|| footer_hint(ui).to_string());
         f.render_widget(
@@ -96,10 +104,11 @@ fn footer_hint(ui: &Ui) -> &'static str {
     use super::Step;
     match ui.screen {
         Screen::Step => match ui.step {
-            Step::Users => " up/down user - left/right field - insert add - delete remove - enter next - esc back - ctrl-c abort",
-            Step::Ssh | Step::Services => " up/down move - insert add - delete remove - enter next - esc back - ctrl-c abort",
-            Step::Review => " enter write config + show plan - esc edit",
-            _ => " up/down move - enter next - backtab/esc back - ctrl-c abort",
+            Step::Target => " [Left/Right] cycle disks  [Enter] next  [Esc] abort",
+            Step::Users => " [Up/Down] user  [Left/Right] field  [Insert] add  [Delete] remove  [Enter] next  [Esc] back",
+            Step::Ssh | Step::Services => " [Up/Down] move  [Insert] add  [Delete] remove  [Enter] next  [Esc] back",
+            Step::Review => " [Enter] write config & show plan  [Esc] edit",
+            _ => " [Up/Down] move  [Enter] next  [Esc] back  [Ctrl+C] abort",
         },
         Screen::Plan => {
             if ui.dry_run {
@@ -126,17 +135,63 @@ fn step_lines(
     use super::Step;
     out.push(Line::default());
     match ui.step {
-        Step::Target | Step::Source | Step::System | Step::Partitions => {
+        Step::Target => {
+            let active = ui.sel == 0;
+            let value: String = ui.draft.target_disk.chars().take(w.saturating_sub(LABEL_W + 7)).collect();
+            out.push(Line::from(vec![
+                Span::styled(format!("  {:<LABEL_W$} ", "disk"), if active { bold().fg(Color::Cyan) } else { Style::default().fg(Color::Gray) }),
+                Span::styled(value.clone(), if active { bold().fg(Color::White) } else { Style::default() }),
+            ]));
+            if active {
+                *cursor = Some(((LABEL_W + 4 + value.len()) as u16, 1));
+            }
+            out.push(Line::default());
+            out.push(Line::from(vec![
+                Span::styled("  Available Disks ", bold().fg(Color::Yellow)),
+                Span::styled("(use [Left]/[Right] or [Up]/[Down] to cycle):", dim()),
+            ]));
+            let disks = crate::target::probe_disks();
+            if disks.is_empty() {
+                out.push(Line::from(Span::styled("    (no block devices found in /sys/block)", dim())));
+            } else {
+                for d in &disks {
+                    let is_sel = d.path.to_string_lossy() == ui.draft.target_disk;
+                    let (marker, m_st) = if is_sel { ("  ● ", bold().fg(Color::Green)) } else { ("    ", dim()) };
+                    let desc = if d.read_only {
+                        format!("(read-only: {})", if d.model.is_empty() { "ISO media" } else { &d.model })
+                    } else if is_sel {
+                        "(selected installation target)".into()
+                    } else {
+                        "(writable block device)".into()
+                    };
+                    out.push(Line::from(vec![
+                        Span::styled(marker, m_st),
+                        Span::styled(format!("{:<12} ", d.path.display()), if is_sel { bold().fg(Color::White) } else { Style::default().fg(Color::Gray) }),
+                        Span::styled(format!("{:>8}  ", d.size_human()), bold().fg(Color::Cyan)),
+                        Span::styled(desc, if is_sel { bold().fg(Color::Green) } else { dim() }),
+                    ]));
+                }
+            }
+        }
+        Step::Source | Step::System | Step::Partitions => {
             for (i, (label, value)) in field_rows(ui).into_iter().enumerate() {
                 let active = i == ui.sel;
                 let value: String = value.chars().take(w.saturating_sub(LABEL_W + 7)).collect();
                 out.push(Line::from(vec![
-                    Span::raw(format!("  {:<LABEL_W$} ", label)),
-                    Span::styled(value.clone(), if active { bold() } else { Style::default() }),
+                    Span::styled(format!("  {:<LABEL_W$} ", label), if active { bold().fg(Color::Cyan) } else { Style::default().fg(Color::Gray) }),
+                    Span::styled(value.clone(), if active { bold().fg(Color::White) } else { Style::default() }),
                 ]));
                 if active {
                     *cursor = Some(((LABEL_W + 4 + value.len()) as u16, i as u16 + 1));
                 }
+            }
+            if ui.step == Step::Source && std::path::Path::new(&ui.draft.source_base).join(crate::source::LIVE_EROFS).is_file() {
+                out.push(Line::default());
+                out.push(Line::from(vec![
+                    Span::styled("  ● ", bold().fg(Color::Green)),
+                    Span::styled("Live ISO media detected: ", bold().fg(Color::Green)),
+                    Span::styled("deploys release payload directly from media", Style::default().fg(Color::White)),
+                ]));
             }
         }
         Step::Filesystems => {
