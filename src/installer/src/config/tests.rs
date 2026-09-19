@@ -413,3 +413,18 @@ fn render_round_trips_through_the_strict_parser() {
     let rt = parse(&render(&c)).unwrap();
     assert_eq!(rt, c);
 }
+
+#[test]
+fn render_live_source_round_trips_through_the_strict_parser() {
+    let mut c = parse(&valid()).unwrap();
+    c.source_mode = SourceMode::Live;
+    c.source_base = "/media/ingot-iso".into();
+    c.version = Version::default();
+    let rendered = render(&c);
+    assert!(rendered.contains("mode = \"live\""));
+    assert!(rendered.contains("base = \"/media/ingot-iso\""));
+    assert!(!rendered.contains("version ="));
+    let rt = parse(&rendered).unwrap();
+    assert_eq!(rt.source_mode, SourceMode::Live);
+    assert_eq!(rt.source_base, "/media/ingot-iso");
+}

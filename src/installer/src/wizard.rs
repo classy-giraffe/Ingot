@@ -181,11 +181,19 @@ impl Draft {
     /// `Err` always carries at least one.
     pub fn config(&self) -> Result<crate::config::Config, Vec<String>> {
         let mut errs: Vec<String> = Vec::new();
-        let version = match crate::version::parse(&self.version) {
-            Ok(v) => v,
-            Err(e) => {
-                errs.push(format!("[source] {e}"));
-                Version::default()
+        let source_base = self.source_base.trim();
+        let is_live = Path::new(source_base)
+            .join(crate::source::LIVE_EROFS)
+            .is_file();
+        let version = if is_live {
+            crate::version::Version::default()
+        } else {
+            match crate::version::parse(&self.version) {
+                Ok(v) => v,
+                Err(e) => {
+                    errs.push(format!("[source] {e}"));
+                    Version::default()
+                }
             }
         };
         let mut size_of = |key: &str, s: &str| -> ByteSize {
@@ -203,17 +211,14 @@ impl Draft {
                 }
             }
         };
-        let is_live = Path::new(&self.source_base)
-            .join(crate::source::LIVE_EROFS)
-            .is_file();
         let cfg = crate::config::Config {
-            target_disk: self.target_disk.clone(),
+            target_disk: self.target_disk.trim().to_string(),
             source_mode: if is_live {
                 crate::config::SourceMode::Live
             } else {
                 crate::config::SourceMode::Artifacts
             },
-            source_base: self.source_base.clone(),
+            source_base: source_base.to_string(),
             version,
             hostname: self.hostname.clone(),
             timezone: self.timezone.clone(),

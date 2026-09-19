@@ -20,11 +20,21 @@ pub fn render(cfg: &Config) -> String {
     s.push_str("[target]\n");
     s.push_str(&format!("disk = {}\n\n", quote(&cfg.target_disk)));
     s.push_str("[source]\n");
-    s.push_str(&format!(
-        "base = {}\nversion = {}\n\n",
-        quote(&cfg.source_base),
-        quote(&cfg.version.to_string())
-    ));
+    match cfg.source_mode {
+        super::SourceMode::Artifacts => {
+            s.push_str(&format!(
+                "base = {}\nversion = {}\n\n",
+                quote(&cfg.source_base),
+                quote(&cfg.version.to_string())
+            ));
+        }
+        super::SourceMode::Live => {
+            s.push_str(&format!(
+                "mode = \"live\"\nbase = {}\n\n",
+                quote(&cfg.source_base)
+            ));
+        }
+    }
     s.push_str("[system]\n");
     s.push_str(&format!(
         "hostname = {}\ntimezone = {}\nlocale = {}\nkeymap = {}\n\n",

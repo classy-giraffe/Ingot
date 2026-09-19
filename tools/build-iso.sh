@@ -58,7 +58,7 @@ ISO=$DIST/ingot_${VERSION}.iso
 KEYS=$REPO/tools/keys
 ISO_LABEL=INGOTLIVE
 command -v sbverify >/dev/null || { echo "build-iso: sbverify not found (sbsigntool)" >&2; exit 1; }
-LIVE_CMDLINE="root=tmpfs ingot.live console=tty0 console=ttyS0"
+LIVE_CMDLINE="root=tmpfs ingot.live console=tty0 console=ttyS0 quiet loglevel=3"
 
 for f in "$UKI" "$DISK" "$SLOT_RAW" "$KEYS/snakeoil.key" "$KEYS/snakeoil.pem"; do
     [ -f "$f" ] || { echo "build-iso: missing input: $f (run tools/build.sh)" >&2; exit 1; }

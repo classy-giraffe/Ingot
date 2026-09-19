@@ -121,6 +121,8 @@ KernelCommandLine=root=PARTUUID=${STATE_UUID}
 KernelCommandLine=rootfstype=btrfs
 KernelCommandLine=usr=PARTUUID=${SLOT_UUID}
 KernelCommandLine=usrfstype=erofs
+KernelCommandLine=quiet
+KernelCommandLine=loglevel=3
 
 [Build]
 Environment=INITRD_NAME=ingot-${VERSION}.initrd

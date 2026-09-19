@@ -80,6 +80,32 @@ fn config_validates_and_parses_the_default_draft() {
 }
 
 #[test]
+fn config_detects_live_source_mode_and_roundtrips() {
+    let dir = tmp("live-draft");
+    let erofs = dir.join(crate::source::LIVE_EROFS);
+    std::fs::create_dir_all(erofs.parent().unwrap()).unwrap();
+    std::fs::write(&erofs, b"fake-erofs").unwrap();
+
+    let mut d = Draft::new();
+    d.target_disk = "/dev/vda".into();
+    d.source_base = dir.to_string_lossy().to_string();
+    d.version = "0.1.0".into();
+
+    let cfg = d.config().expect("live draft should validate cleanly");
+    assert_eq!(cfg.source_mode, crate::config::SourceMode::Live);
+    assert_eq!(cfg.source_base, dir.to_string_lossy());
+
+    let rendered = crate::config::render(&cfg);
+    assert!(rendered.contains("mode = \"live\""));
+    assert!(!rendered.contains("version ="));
+
+    let reparsed = crate::config::parse(&rendered).unwrap();
+    assert_eq!(reparsed.source_mode, crate::config::SourceMode::Live);
+    assert_eq!(reparsed.source_base, dir.to_string_lossy());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn config_diagnostics_name_the_category_and_key() {
     let mut d = Draft::new();
     d.target_disk = "/dev/vda".into();
