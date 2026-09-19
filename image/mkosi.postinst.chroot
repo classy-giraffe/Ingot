@@ -93,6 +93,9 @@ for f in passwd shadow group nsswitch.conf login.defs securetty shells; do
     [ -e "/etc/$f" ] || continue
     cp -a "/etc/$f" "$factory_etc/"
 done
+sed -i 's|^root:x:0:0:root:/root:.*|root:x:0:0:root:/root:/usr/bin/nushell|' "$factory_etc/passwd"
+grep -qx '/usr/bin/nushell' "$factory_etc/shells" 2>/dev/null \
+    || printf '/usr/bin/nu\n/usr/bin/nushell\n' >> "$factory_etc/shells"
 cp -a /etc/pam.d "$factory_etc/"
 [ -d /etc/security ] && cp -a /etc/security "$factory_etc/"
 [ -d /etc/authselect ] && cp -a /etc/authselect "$factory_etc/"

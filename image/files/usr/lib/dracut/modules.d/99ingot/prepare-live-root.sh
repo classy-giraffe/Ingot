@@ -71,7 +71,7 @@ echo "ingot-live-prepare: ISO media at $iso_dev"
 # The ISO media under the runtime root (read-only), and the live
 # payload from it: a file-backed erofs mount at /usr (the payload is
 # a file on the ISO media, not a block device).
-mountpoint -q "$NEWROOT" || mount -t tmpfs -o mode=0755 tmpfs "$NEWROOT" \
+mountpoint -q "$NEWROOT" 2>/dev/null || mount -t tmpfs -o mode=0755 tmpfs "$NEWROOT" \
     || fail "tmpfs root mount failed"
 mkdir -p "$NEWROOT/media/ingot-iso"
 mount -t iso9660 -o ro "$iso_dev" "$NEWROOT/media/ingot-iso" \
@@ -122,8 +122,42 @@ grep -q '^root:' "$shadow" || fail "no root shadow entry"
 } > "$shadow.new" || fail "cannot unlock the console root"
 mv "$shadow.new" "$shadow"
 
+# Live console shell: set root's login shell to nushell (spec 3.1, CONTEXT.md:
+# nushell is the interactive admin shell; bash stays the initramfs shell).
+passwd="$NEWROOT/var/lib/etc/passwd"
+if [ -f "$passwd" ]; then
+    {
+        while IFS=: read -r name pass uid gid gecos home shell; do
+            if [ "$name" = root ]; then
+                printf 'root:%s:%s:%s:%s:%s:/usr/bin/nushell\n' "$pass" "$uid" "$gid" "$gecos" "$home"
+            else
+                printf '%s:%s:%s:%s:%s:%s:%s\n' "$name" "$pass" "$uid" "$gid" "$gecos" "$home" "$shell"
+            fi
+        done < "$passwd"
+    } > "$passwd.new" && mv "$passwd.new" "$passwd"
+fi
+
+# Ensure /etc/shells lists nushell as a valid login shell
+shells="$NEWROOT/var/lib/etc/shells"
+if [ -f "$shells" ]; then
+    grep -qx '/usr/bin/nushell' "$shells" 2>/dev/null \
+        || printf '/usr/bin/nu\n/usr/bin/nushell\n' >> "$shells"
+fi
+
 # Live identity: the hostname the console prompt carries.
 printf 'ingot-live\n' > "$NEWROOT/var/lib/etc/hostname"
+
+# Live console autologin: drop directly into the interactive nushell
+# session on the live console (tty1 and serial headless terminal).
+for s in getty@tty1 serial-getty@ttyS0 getty@ttyS0; do
+    d="$NEWROOT/var/lib/etc/systemd/system/${s}.service.d"
+    mkdir -p "$d"
+    cat > "$d/autologin.conf" <<'EOF'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty -o '-p -f -- \\u' --noclear --autologin root %I $TERM
+EOF
+done
 
 # Live SSH rescue (spec 10.2: the ISO offers SSH for remote workflows,
 # headless). The slot payload carries the repo's live test key
