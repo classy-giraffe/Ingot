@@ -149,5 +149,17 @@ class TestMtoolsRoundTrip(unittest.TestCase):
         self.assertEqual(state["default"], "ingot_0.2.0+3")
 
 
+class TestNvramVars(unittest.TestCase):
+    def test_read_nvram_vars_existing(self):
+        vars_fd = Path(__file__).resolve().parent.parent / "dist" / "test-vars.fd"
+        if not vars_fd.exists():
+            self.skipTest("dist/test-vars.fd not present")
+        v = esp.read_nvram_vars(vars_fd)
+        self.assertIn("BootOrder", v)
+
+    def test_read_nvram_vars_nonexistent(self):
+        self.assertEqual(esp.read_nvram_vars("/nonexistent/vars.fd"), {})
+
+
 if __name__ == "__main__":
     unittest.main()

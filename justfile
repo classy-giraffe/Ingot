@@ -40,10 +40,28 @@ ab:
 install *args:
 	sudo src/target/release/ingot-installer {{args}}
 
-# Host-side unittest suite (no VM, seconds).
-test:
-	python3 -m unittest discover -s harness -p 'test_*.py' -v
+# Host-side unittest suite (fast, no VM).
+test *args:
+	@if [ -x .venv/bin/pytest ]; then \
+		.venv/bin/pytest harness/test_*.py {{args}}; \
+	else \
+		python3 -m unittest discover -s harness -p 'test_*.py' -v {{args}}; \
+	fi
 
+# Python linting and formatting via ruff.
+lint *args:
+	@if [ -x .venv/bin/ruff ]; then \
+		.venv/bin/ruff check harness/ tools/ {{args}}; \
+	else \
+		echo "ruff not found; install with: uv pip install ruff"; \
+	fi
+
+fmt *args:
+	@if [ -x .venv/bin/ruff ]; then \
+		.venv/bin/ruff format harness/ tools/ {{args}}; \
+	else \
+		echo "ruff not found; install with: uv pip install ruff"; \
+	fi
 # Rust workspace tests (offline; the helper's fixtures are committed in
 # src/update-helper/tests/).
 rust-test:
