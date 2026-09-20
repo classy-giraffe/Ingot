@@ -277,6 +277,11 @@ def scenario_a_live_iso(ovmf):
     q = Qemu(work1, ovmf, iso=ISO, ssh_port=port1)
     try:
         text1 = q.wait_marker(MARK_NO_CONFIG, timeout=600)
+        for _ in range(5):
+            if console.console_contains(text1, "login:") or console.console_contains(text1, "getty.target"):
+                break
+            time.sleep(1)
+            text1 = q.console_path.read_text(errors="replace") if q.console_path.exists() else text1
         rc, out, err = ssh_run(port1, SSH_USER_LIVE, "hostname")
         checks["live_ssh"] = {
             "pass": rc == 0 and out.strip() == HOSTNAME_LIVE,
