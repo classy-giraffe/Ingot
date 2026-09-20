@@ -69,17 +69,7 @@ pub struct DiscoveredDisk {
 
 impl DiscoveredDisk {
     pub fn size_human(&self) -> String {
-        let gb = self.size_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-        if gb >= 1.0 {
-            if gb.fract() < 0.05 {
-                format!("{:.0} GiB", gb)
-            } else {
-                format!("{:.1} GiB", gb)
-            }
-        } else {
-            let mb = self.size_bytes as f64 / (1024.0 * 1024.0);
-            format!("{:.0} MiB", mb)
-        }
+        crate::size::human_approx(self.size_bytes)
     }
 }
 /// Discovers candidate target block devices by inspecting `/sys/block`.

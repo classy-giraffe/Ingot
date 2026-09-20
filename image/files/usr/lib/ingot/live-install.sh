@@ -31,10 +31,16 @@ mark() {
 # config - the ISO itself has no ingot-install.toml).
 config_dev=""
 mkdir -p "$CONFIG_MOUNT"
+candidates=""
 for d in /sys/block/*; do
     n=$(basename "$d")
-    case $n in loop* | ram* | dm-* | md*) continue ;; esac
-    dev="/dev/$n"
+    case $n in loop* | ram* | dm-* | md* | sr*) continue ;; esac
+    candidates="$candidates /dev/$n"
+    for part in "$d"/"$n"*; do
+        [ -d "$part" ] && candidates="$candidates /dev/$(basename "$part")"
+    done
+done
+for dev in $candidates; do
     [ -b "$dev" ] || continue
     blkid -s TYPE "$dev" >/dev/null 2>&1 || continue
     if mount -o ro,noexec,nosuid "$dev" "$CONFIG_MOUNT" 2>/dev/null; then

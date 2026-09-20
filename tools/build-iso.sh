@@ -374,6 +374,7 @@ cmp -s "$WORK/esp-tree/EFI/BOOT/BOOTX64.EFI" "$WORK/BOOTX64.EFI" \
 mkdir -p "$WORK/iso/EFI/BOOT" "$WORK/iso/EFI/Linux" "$WORK/iso/LiveOS" "$WORK/iso/loader" "$WORK/iso/ESP"
 cp "$WORK/BOOTX64.EFI" "$WORK/iso/EFI/BOOT/BOOTX64.EFI"
 cp "$WORK/live.efi" "$WORK/iso/EFI/Linux/ingot_${VERSION}_live.efi"
+cp "$WORK/live.efi" "$WORK/iso/EFI/Linux/live.efi"
 cp "$WORK/rootfs.erofs" "$WORK/iso/LiveOS/rootfs.erofs"
 cp "$WORK/loader.conf" "$WORK/iso/loader/loader.conf"
 # the installed ESP tree (section 4): the live install source's

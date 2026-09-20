@@ -202,11 +202,8 @@ ln -s ../ingot-live-install.service \
 
 # A fresh machine identity per live boot (ephemeral, spec 10.5). An
 # initialized machine-id keeps systemd out of the first-boot flow.
-hex=""
-while [ ${#hex} -lt 32 ]; do
-    hex="$hex$((RANDOM % 16))$((RANDOM % 16))"
-done
-printf '%s\n' "$hex" > "$NEWROOT/var/lib/etc/machine-id"
+head -c 16 /dev/urandom 2>/dev/null | sha256sum | head -c 32 > "$NEWROOT/var/lib/etc/machine-id"
+echo "" >> "$NEWROOT/var/lib/etc/machine-id"
 
 # usr symlinks and empty top-level directories (CONTEXT.md: runtime
 # root; the live /var is a tmpfs-backed directory, not a partition).

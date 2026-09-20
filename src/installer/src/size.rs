@@ -93,6 +93,21 @@ pub fn human(bytes: u64) -> String {
     format!("{bytes} B")
 }
 
+/// Human-readable approximate size for device listings (e.g. `32 GiB`, `1.2 GiB`, `512 MiB`).
+pub fn human_approx(bytes: u64) -> String {
+    let gb = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    if gb >= 1.0 {
+        if gb.fract() < 0.05 {
+            format!("{:.0} GiB", gb)
+        } else {
+            format!("{:.1} GiB", gb)
+        }
+    } else {
+        let mb = bytes as f64 / (1024.0 * 1024.0);
+        format!("{:.0} MiB", mb)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
