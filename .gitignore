@@ -14,3 +14,7 @@ t4/
 
 # t5 scratch workspace (wizard E2E disks/logs)
 t5/
+
+# private keys
+tools/keys/*.sec
+tools/keys/*.key.sec

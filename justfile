@@ -3,7 +3,8 @@
 #   just build                 build the pinned release (0.1.0, slot A) from
 #                              the archived compose
 #   just build <flags>         extra flags pass through to tools/build.sh
-#                              verbatim (e.g. --version 0.2.0 --slot b)
+#   just release               build the signed release asset set (T7)
+#   just publish               publish the release gated on harness (T7)
 #   just harness               T1 boot harness (probe injected into the
 #                              working disk's /var; deep invariants)
 #   just prod                  T1 gate, probe-free: host-side evidence only
@@ -99,3 +100,13 @@ test-iso *extra:
 		-serial mon:stdio \
 		-display none \
 		{{extra}}
+
+# T7 release pipeline: produces the signed release asset set (root.erofs, UKI,
+# ISO, SHA256SUMS, manifest.json, and GPG signatures) with hard 2 GiB assertion.
+release *args:
+	python3 tools/release.py {{args}}
+
+# T7 publish gate: publishes the release to GitHub Releases, gated on a green
+# harness result; immutable (refuses to overwrite existing releases).
+publish *args:
+	python3 tools/publish.py {{args}}
