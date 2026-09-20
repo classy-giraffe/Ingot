@@ -84,9 +84,9 @@ pub fn render(cfg: &Config) -> String {
 /// bare byte count. Round-trips through `size::parse_size`.
 fn size_str(s: ByteSize) -> String {
     let b = s.0;
-    if b % GIB == 0 {
+    if b.is_multiple_of(GIB) {
         format!("{}G", b / GIB)
-    } else if b % MIB == 0 {
+    } else if b.is_multiple_of(MIB) {
         format!("{}M", b / MIB)
     } else {
         b.to_string()

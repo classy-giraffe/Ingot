@@ -220,11 +220,10 @@ pub fn available_versions(base: &Path) -> Vec<Version> {
         let Ok(m) = e.metadata() else {
             continue;
         };
-        if m.is_file() {
-            if let Ok(v) = crate::version::parse(v) {
+        if m.is_file()
+            && let Ok(v) = crate::version::parse(v) {
                 out.push(v);
             }
-        }
     }
     out.sort_by(|a, b| b.cmp(a));
     out

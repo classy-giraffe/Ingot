@@ -231,7 +231,7 @@ pub fn run(cfg: Config, work: &Path) -> Result<(), String> {
     // the warning is still mandatory.
     eprintln!(
         "WARNING: this install will destroy all existing content on {}",
-        &cfg.target_disk
+        cfg.target_disk
     );
     let plan = plan(cfg)?;
 
@@ -281,11 +281,10 @@ pub fn run(cfg: Config, work: &Path) -> Result<(), String> {
             format!("{e}; target is a block device: no automatic rollback")
         };
         let _ = log.log_result("failure", "install-failed", Some(detail));
-        if let Some(vm) = &var_mount {
-            if is_mounted(vm) {
+        if let Some(vm) = &var_mount
+            && is_mounted(vm) {
                 let _ = finalize::copy_log_to_var(&log, vm);
             }
-        }
         finalize::sync_all();
         finalize::teardown_failure(&mut target);
         return Err(e);
@@ -341,7 +340,7 @@ fn run_phases(
     let mut esp_mount: Option<PathBuf> = None;
     match &plan.source {
         PlanSource::Artifacts { .. } => {
-            deploy::deploy(&plan.source.artifacts()[..], &parts, log)?;
+            deploy::deploy(plan.source.artifacts(), &parts, log)?;
         }
         PlanSource::Live(live) => {
             let esp_dev = parts

@@ -267,7 +267,8 @@ pub(super) fn parse_encryption(
 /// 11.4 category parse: users.
 pub(super) fn parse_users(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<User> {
     // 11.4.9 initial users
-    let users = match doc.get("users") {
+    
+    match doc.get("users") {
         None => {
             errs.push(
                 "category '[[users]]' missing (at least one initial user is required)".into(),
@@ -331,13 +332,13 @@ pub(super) fn parse_users(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<User
             ));
             Vec::new()
         }
-    };
-    users
+    }
 }
 /// 11.4 category parse: ssh.
 pub(super) fn parse_ssh(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<String> {
     // 11.4.10 SSH authorized keys
-    let ssh_keys = match doc.get("ssh") {
+    
+    match doc.get("ssh") {
         None => {
             errs.push("category '[ssh]' missing (required: authorized_keys)".into());
             Vec::new()
@@ -346,7 +347,8 @@ pub(super) fn parse_ssh(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<String
             None => Vec::new(),
             Some(t) => {
                 unknown_keys(t, "ssh", &["authorized_keys"], errs);
-                let keys = match t.get("authorized_keys") {
+                
+                match t.get("authorized_keys") {
                     None => {
                         errs.push("[ssh] key 'authorized_keys' missing".into());
                         Vec::new()
@@ -375,17 +377,16 @@ pub(super) fn parse_ssh(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<String
                         ));
                         Vec::new()
                     }
-                };
-                keys
+                }
             }
         },
-    };
-    ssh_keys
+    }
 }
 /// 11.4 category parse: services.
 pub(super) fn parse_services(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<String> {
     // 11.4.11 service enablement policy
-    let services = match doc.get("services") {
+    
+    match doc.get("services") {
         None => {
             errs.push("category '[services]' missing (required: enabled)".into());
             Vec::new()
@@ -394,7 +395,8 @@ pub(super) fn parse_services(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<S
             None => Vec::new(),
             Some(t) => {
                 unknown_keys(t, "services", &["enabled"], errs);
-                let units = match t.get("enabled") {
+                
+                match t.get("enabled") {
                     None => {
                         errs.push("[services] key 'enabled' missing".into());
                         Vec::new()
@@ -423,10 +425,8 @@ pub(super) fn parse_services(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<S
                         ));
                         Vec::new()
                     }
-                };
-                units
+                }
             }
         },
-    };
-    services
+    }
 }

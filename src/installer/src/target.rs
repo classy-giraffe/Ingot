@@ -382,20 +382,18 @@ impl DiskTarget {
         let mut first_err: Option<String> = None;
         for dir in self.mounts.iter().rev() {
             let d = dir.to_string_lossy().to_string();
-            if let Err(e) = run("umount", &[&d]) {
-                if first_err.is_none() {
+            if let Err(e) = run("umount", &[&d])
+                && first_err.is_none() {
                     first_err = Some(e);
                 }
-            }
         }
         self.mounts.clear();
         if let Some(loop_dev) = &self.loop_dev {
             let d = loop_dev.to_string_lossy().to_string();
-            if let Err(e) = run("losetup", &["-d", &d]) {
-                if first_err.is_none() {
+            if let Err(e) = run("losetup", &["-d", &d])
+                && first_err.is_none() {
                     first_err = Some(e);
                 }
-            }
         }
         self.loop_dev = None;
         match first_err {

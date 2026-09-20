@@ -74,7 +74,7 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
         }
     }
     let b: Vec<u8> = s.bytes().collect();
-    if b.is_empty() || b.len() % 4 != 0 {
+    if b.is_empty() || !b.len().is_multiple_of(4) {
         return None;
     }
     let mut res = Vec::new();

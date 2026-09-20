@@ -270,14 +270,13 @@ impl Ui {
                     }
                 }
             }
-            Step::Services => {
-                if self.sel < self.draft.services.len() {
+            Step::Services
+                if self.sel < self.draft.services.len() => {
                     self.draft.services.remove(self.sel);
                     if self.sel > 0 {
                         self.sel -= 1;
                     }
                 }
-            }
             _ => {}
         }
     }

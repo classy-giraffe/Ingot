@@ -1,11 +1,12 @@
 use super::*;
+use std::os::unix::fs::PermissionsExt;
 #[test]
 fn missing_tools_reports_gaps() {
     let dir = std::env::temp_dir().join("ingot-tools-test");
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("systemd-repart"), "#!/bin/sh\n").unwrap();
     fs::set_permissions(
-        &dir.join("systemd-repart"),
+        dir.join("systemd-repart"),
         fs::Permissions::from_mode(0o755),
     )
     .unwrap();

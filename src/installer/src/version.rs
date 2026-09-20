@@ -11,21 +11,13 @@ use std::fmt;
 
 /// A release version: numeric semver triple.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Default)]
 pub struct Version {
     pub major: u64,
     pub minor: u64,
     pub patch: u64,
 }
 
-impl Default for Version {
-    fn default() -> Self {
-        Version {
-            major: 0,
-            minor: 0,
-            patch: 0,
-        }
-    }
-}
 
 impl fmt::Display for Version {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
