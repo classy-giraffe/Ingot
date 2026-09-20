@@ -5,7 +5,7 @@
   "ovmf": {
     "code": {
       "path": "/usr/share/OVMF/OVMF_CODE_4M.snakeoil.fd",
-      "sha256": "9c0155a4ab5ae5cd53d743f6ce8e50d228704020f188412d81e97953bd95776f"
+      "sha256": "c7a80922b9254b1a06239cc9afd9a21e68f8002f46ec7a84905c7d8a330417dd"
     },
     "vars": {
       "path": "/usr/share/OVMF/OVMF_VARS_4M.snakeoil.fd",

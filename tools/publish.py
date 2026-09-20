@@ -43,13 +43,17 @@ def check_harness_gate(results_path: Path) -> bool:
         )
 
     checks = data.get("checks", {})
+    if not checks:
+        raise RuntimeError(
+            f"publish: harness results at '{results_path}' contain no check entries - "
+            f"cannot publish without a green harness result"
+        )
     failed_checks = []
-    for name, c in checks.items():
-        # A check can be boolean or object with ok/pass
-        if isinstance(c, dict):
-            ok = c.get("ok", c.get("pass", False))
+    for name, check_item in checks.items():
+        if isinstance(check_item, dict):
+            ok = check_item.get("ok", check_item.get("pass", False))
         else:
-            ok = bool(c)
+            ok = bool(check_item)
         if not ok:
             failed_checks.append(name)
 
@@ -79,6 +83,12 @@ def check_release_immutability(repo: str, tag: str) -> bool:
             f"published releases are immutable (no yank, no replace)"
         )
 
+    stderr_lower = res.stderr.lower()
+    if "not found" not in stderr_lower and "no release" not in stderr_lower:
+        raise RuntimeError(
+            f"publish: failed to verify release immutability on {repo}: {res.stderr.strip()}"
+        )
+
     return True
 
 
@@ -86,96 +96,55 @@ def verify_release_assets(
     dist_dir: Path, version: str, pubkey_path: Path
 ) -> list[Path]:
     """Verify all release assets exist and detached GPG signatures are valid."""
-    required_files = [
-        dist_dir / f"ingot_{version}.root.erofs",
-        dist_dir / f"ingot_{version}.root.erofs.gpg",
-        dist_dir / f"ingot_{version}.efi",
-        dist_dir / f"ingot_{version}.efi.gpg",
-        dist_dir / f"ingot_{version}.iso",
-        dist_dir / f"ingot_{version}.iso.gpg",
-        dist_dir / "SHA256SUMS",
-        dist_dir / "SHA256SUMS.gpg",
-        dist_dir / "manifest.json",
-        dist_dir / "manifest.json.gpg",
-    ]
+    required_names = release.canonical_asset_names(version)
+    required_files = [dist_dir / name for name in required_names]
 
-    for f in required_files:
-        if not f.exists():
-            raise FileNotFoundError(f"publish: required release asset missing: {f}")
+    for asset_file in required_files:
+        if not asset_file.exists():
+            raise FileNotFoundError(
+                f"publish: required release asset missing: {asset_file}"
+            )
 
-    # Verify GPG signatures
-    for f in required_files:
-        if f.name.endswith(".gpg"):
-            target = f.with_name(f.name[:-4])
-            if not release.verify_file_signature(target, f, pubkey_path):
-                raise RuntimeError(
-                    f"publish: signature verification failed for {f.name} against {pubkey_path}"
-                )
+    signatures = [f for f in required_files if f.name.endswith(".gpg")]
+    release.verify_signatures_set(dist_dir, signatures, pubkey_path)
 
     return required_files
 
 
-def publish_release(
-    repo: str = "classy-giraffe/Ingot",
-    version: str | None = None,
-    dist_dir: Path | None = None,
-    harness_results: Path | None = None,
-    repo_root: Path = REPO_ROOT,
-    notes: str | None = None,
-    dry_run: bool = False,
-    prerelease: bool = False,
-) -> dict:
-    """Publish the release to GitHub Releases, enforcing all gates."""
-    if dist_dir is None:
-        dist_dir = repo_root / "dist"
-    pins = json.loads((repo_root / "tools/pins.json").read_text())
-    if version is None:
-        version = pins["image_version"]
-
-    tag = f"v{version}"
-    pubkey_path = repo_root / "tools/keys/project.pgp"
-
-    # Default harness results path
-    if harness_results is None:
-        harness_results = dist_dir / "harness/results.json"
-
+def validate_publish_gates(
+    repo: str,
+    tag: str,
+    version: str,
+    dist_dir: Path,
+    harness_results: Path,
+    pubkey_path: Path,
+) -> list[Path]:
+    """Validate all three publish gates before uploading."""
     print(f"publish: validating gates for {repo} {tag}...")
 
-    # Gate 1: Harness gate
     check_harness_gate(harness_results)
     print(f"publish: [Gate 1] harness results green at {harness_results} -> PASS")
 
-    # Gate 2: Immutability gate
     check_release_immutability(repo, tag)
     print(
         f"publish: [Gate 2] release {tag} does not exist on {repo} (immutable) -> PASS"
     )
 
-    # Gate 3: Release asset verification & GPG signatures
     upload_files = verify_release_assets(dist_dir, version, pubkey_path)
     print(
         f"publish: [Gate 3] all {len(upload_files)} assets and GPG signatures verified -> PASS"
     )
+    return upload_files
 
-    if notes is None:
-        notes = (
-            f"Ingot {version} release.\n\n"
-            f"Base compose: {pins['compose']['id']}\n"
-            f"All release assets are signed with the project GPG key and verified against the vendor keyring."
-        )
 
-    if dry_run:
-        print(
-            f"publish: dry-run mode - would publish {tag} with {len(upload_files)} assets to {repo}"
-        )
-        return {
-            "status": "dry_run",
-            "repo": repo,
-            "tag": tag,
-            "assets": [f.name for f in upload_files],
-        }
-
-    # Execute publication via gh release create
+def dispatch_github_release(
+    repo: str,
+    tag: str,
+    upload_files: list[Path],
+    notes: str,
+    prerelease: bool = False,
+) -> str:
+    """Invoke gh release create to publish the release and upload assets."""
     cmd = [
         "gh",
         "release",
@@ -199,12 +168,75 @@ def publish_release(
 
     release_url = res.stdout.strip()
     print(f"publish: successfully published release: {release_url}")
+    return release_url
+
+
+def default_release_notes(version: str, compose_id: str) -> str:
+    """Construct default release notes describing the release and compose pin."""
+    return (
+        f"Ingot {version} release.\n\n"
+        f"Base compose: {compose_id}\n"
+        "All release assets are signed with the project GPG key and verified against the vendor keyring."
+    )
+
+
+def resolve_publish_params(
+    version: str | None,
+    dist_dir: Path | None,
+    harness_results: Path | None,
+    repo_root: Path,
+) -> tuple[str, Path, Path, str]:
+    """Resolve version, paths, and compose ID from repository pins."""
+    pins = json.loads((repo_root / "tools/pins.json").read_text())
+    resolved_version = version or pins["image_version"]
+    dist = dist_dir or (repo_root / "dist")
+    harness = harness_results or (dist / "harness/results.json")
+    return resolved_version, dist, harness, pins["compose"]["id"]
+
+
+def publish_release(
+    repo: str = "classy-giraffe/Ingot",
+    version: str | None = None,
+    dist_dir: Path | None = None,
+    harness_results: Path | None = None,
+    repo_root: Path = REPO_ROOT,
+    notes: str | None = None,
+    dry_run: bool = False,
+    prerelease: bool = False,
+) -> dict:
+    """Publish the release to GitHub Releases, enforcing all gates."""
+    version, dist_dir, harness_results, compose_id = resolve_publish_params(
+        version, dist_dir, harness_results, repo_root
+    )
+    tag = f"v{version}"
+    pubkey_path = repo_root / "tools/keys/project.pgp"
+
+    upload_files = validate_publish_gates(
+        repo=repo,
+        tag=tag,
+        version=version,
+        dist_dir=dist_dir,
+        harness_results=harness_results,
+        pubkey_path=pubkey_path,
+    )
+
+    if notes is None:
+        notes = default_release_notes(version, compose_id)
+
+    asset_names = [f.name for f in upload_files]
+    if dry_run:
+        print(
+            f"publish: dry-run mode - would publish {tag} with {len(upload_files)} assets to {repo}"
+        )
+        return {"status": "dry_run", "repo": repo, "tag": tag, "assets": asset_names}
+
+    url = dispatch_github_release(repo, tag, upload_files, notes, prerelease)
     return {
         "status": "published",
         "repo": repo,
         "tag": tag,
-        "url": release_url,
-        "assets": [f.name for f in upload_files],
+        "url": url,
+        "assets": asset_names,
     }
 
 

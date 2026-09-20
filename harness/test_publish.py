@@ -40,6 +40,19 @@ class TestPublishGate(unittest.TestCase):
         finally:
             results_path.unlink()
 
+    def test_harness_gate_empty_checks_fails(self):
+        """Publish refuses to run if checks dictionary is empty."""
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            f.write(json.dumps({"pass": True, "checks": {}}).encode())
+            results_path = Path(f.name)
+
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                publish.check_harness_gate(results_path)
+            self.assertIn("no check entries", str(ctx.exception).lower())
+        finally:
+            results_path.unlink()
+
     def test_harness_gate_failed_individual_check(self):
         """Publish refuses to run if any individual check is not passing."""
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
@@ -99,6 +112,16 @@ class TestPublishGate(unittest.TestCase):
         )
         ok = publish.check_release_immutability("classy-giraffe/Ingot", "v0.1.0")
         self.assertTrue(ok)
+
+    @patch("subprocess.run")
+    def test_immutability_raises_on_network_or_auth_error(self, mock_run):
+        """Publish fails if checking release fails with network or auth error, not not-found."""
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="", stderr="error: network connection timed out"
+        )
+        with self.assertRaises(RuntimeError) as ctx:
+            publish.check_release_immutability("classy-giraffe/Ingot", "v0.1.0")
+        self.assertIn("network connection timed out", str(ctx.exception))
 
 
 if __name__ == "__main__":

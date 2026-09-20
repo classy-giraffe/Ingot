@@ -24,6 +24,48 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 import release
 
 
+def sample_manifest_fixtures():
+    """Sample pins, erofs info, and assets for manifest tests."""
+    pins = {
+        "compose": {"id": "Fedora-Rawhide-20260916.n.0"},
+        "rust": {
+            "brush": {"repo": "r", "tag": "t", "sha": "s1"},
+            "nushell": {"repo": "r", "tag": "t", "sha": "s2"},
+            "helix": {"repo": "r", "tag": "t", "sha": "s3"},
+            "zellij": {"repo": "r", "tag": "t", "sha": "s4"},
+            "coreutils": {"repo": "r", "tag": "t", "sha": "s5"},
+        },
+    }
+    erofs_info = {
+        "source_date_epoch": 1789516800,
+        "compression": "zstd",
+        "block_size": 4096,
+        "blocks": 137797,
+        "bytes": 564416512,
+    }
+    assets = [
+        {"name": "ingot_0.1.0.root.erofs", "sha256": "a" * 64, "role": "payload"},
+        {"name": "ingot_0.1.0.efi", "sha256": "b" * 64, "role": "uki"},
+        {"name": "ingot_0.1.0.iso", "sha256": "c" * 64, "role": "live"},
+        {"name": "SHA256SUMS", "sha256": "d" * 64},
+        {"name": "SHA256SUMS.gpg", "sha256": "e" * 64},
+    ]
+    return pins, erofs_info, assets
+
+
+def setup_mock_release_tree(td_path: Path, files: list[Path]) -> tuple[Path, Path]:
+    """Create local releases.json and assets directory for update-helper testing."""
+    releases_json = td_path / "releases.json"
+    releases_json.write_text(
+        json.dumps([{"tag_name": "v0.1.0", "draft": False, "prerelease": False}])
+    )
+    assets_dir = td_path / "assets" / "v0.1.0"
+    assets_dir.mkdir(parents=True)
+    for f in files:
+        (assets_dir / f.name).write_bytes(f.read_bytes())
+    return releases_json, td_path / "assets"
+
+
 class TestReleasePipeline(unittest.TestCase):
     def test_erofs_superblock_parse(self):
         """Parse erofs superblock to get block count and block size."""
@@ -77,33 +119,9 @@ class TestReleasePipeline(unittest.TestCase):
 
     def test_manifest_v1_schema_and_metadata(self):
         """Manifest conforms to v1 schema with required build metadata."""
-        version = "0.1.0"
-        pins = {
-            "compose": {"id": "Fedora-Rawhide-20260916.n.0"},
-            "rust": {
-                "brush": {"repo": "r", "tag": "t", "sha": "s1"},
-                "nushell": {"repo": "r", "tag": "t", "sha": "s2"},
-                "helix": {"repo": "r", "tag": "t", "sha": "s3"},
-                "zellij": {"repo": "r", "tag": "t", "sha": "s4"},
-                "coreutils": {"repo": "r", "tag": "t", "sha": "s5"},
-            },
-        }
-        erofs_info = {
-            "source_date_epoch": 1789516800,
-            "compression": "zstd",
-            "block_size": 4096,
-            "blocks": 137797,
-            "bytes": 564416512,
-        }
-        assets = [
-            {"name": "ingot_0.1.0.root.erofs", "sha256": "a" * 64, "role": "payload"},
-            {"name": "ingot_0.1.0.efi", "sha256": "b" * 64, "role": "uki"},
-            {"name": "ingot_0.1.0.iso", "sha256": "c" * 64, "role": "live"},
-            {"name": "SHA256SUMS", "sha256": "d" * 64},
-            {"name": "SHA256SUMS.gpg", "sha256": "e" * 64},
-        ]
+        pins, erofs_info, assets = sample_manifest_fixtures()
         manifest = release.build_manifest(
-            version=version,
+            version="0.1.0",
             pins=pins,
             erofs_info=erofs_info,
             kernel_nvr="7.3.0-0.rc3.fc46.x86_64",
@@ -111,13 +129,11 @@ class TestReleasePipeline(unittest.TestCase):
             timestamp="2026-09-20T12:00:00Z",
         )
 
-        # Assert v1 schema fields
         self.assertEqual(manifest["schema"], 1)
         self.assertEqual(manifest["version"], "0.1.0")
         self.assertEqual(manifest["tag"], "v0.1.0")
         self.assertEqual(manifest["image_version"], "0.1.0")
 
-        # Assert build metadata per spec 20.4
         build = manifest["build"]
         self.assertEqual(build["compose"], "Fedora-Rawhide-20260916.n.0")
         self.assertEqual(build["component_pins"], pins["rust"])
@@ -125,7 +141,6 @@ class TestReleasePipeline(unittest.TestCase):
         self.assertEqual(build["kernel"], "7.3.0-0.rc3.fc46.x86_64")
         self.assertEqual(build["timestamp"], "2026-09-20T12:00:00Z")
 
-        # Assert assets array
         self.assertEqual(len(manifest["assets"]), 5)
         for a in manifest["assets"]:
             self.assertTrue(len(a["sha256"]) == 64)
@@ -177,24 +192,8 @@ class TestReleasePipeline(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
-            releases_json = td_path / "releases.json"
-            releases_json.write_text(
-                json.dumps(
-                    [
-                        {
-                            "tag_name": "v0.1.0",
-                            "draft": False,
-                            "prerelease": False,
-                        }
-                    ]
-                )
-            )
-
-            assets_dir = td_path / "assets" / "v0.1.0"
-            assets_dir.mkdir(parents=True)
-            for f in (manifest_file, manifest_sig, sums_file, sums_sig):
-                (assets_dir / f.name).write_bytes(f.read_bytes())
-
+            files = [manifest_file, manifest_sig, sums_file, sums_sig]
+            rel_json, asset_base = setup_mock_release_tree(td_path, files)
             cmd = [
                 str(helper_bin),
                 "--repo",
@@ -202,9 +201,9 @@ class TestReleasePipeline(unittest.TestCase):
                 "--keyring",
                 str(keyring),
                 "--api",
-                f"file://{releases_json}",
+                f"file://{rel_json}",
                 "--asset-base",
-                f"file://{td_path}/assets",
+                f"file://{asset_base}",
             ]
             res = subprocess.run(cmd, capture_output=True, text=True, check=False)
             self.assertEqual(res.returncode, 0, f"helper stderr: {res.stderr}")
@@ -212,6 +211,36 @@ class TestReleasePipeline(unittest.TestCase):
             self.assertEqual(pin["version"], "0.1.0")
             self.assertEqual(pin["tag"], "v0.1.0")
             self.assertTrue(len(pin["assets"]) >= 3)
+
+    def test_load_build_metadata(self):
+        """Dynamic metadata loading extracts kernel, compose, and erofs parameters."""
+        meta_data = {
+            "image_id": "ingot",
+            "image_version": "0.1.0",
+            "compose": "Fedora-Rawhide-test",
+            "kernel": "7.3.0-custom",
+            "artifacts": {
+                "slot_erofs": {
+                    "parameters": {
+                        "source_date_epoch": 123456789,
+                        "compression": "zstd",
+                        "mechanism": "custom-repart",
+                    }
+                }
+            },
+        }
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            f.write(json.dumps(meta_data).encode())
+            meta_path = Path(f.name)
+
+        try:
+            meta = release.load_build_metadata(meta_path)
+            self.assertEqual(meta["kernel"], "7.3.0-custom")
+            self.assertEqual(meta["compose"], "Fedora-Rawhide-test")
+            self.assertEqual(meta["erofs_parameters"]["mechanism"], "custom-repart")
+            self.assertEqual(meta["erofs_parameters"]["source_date_epoch"], 123456789)
+        finally:
+            meta_path.unlink()
 
 
 if __name__ == "__main__":
