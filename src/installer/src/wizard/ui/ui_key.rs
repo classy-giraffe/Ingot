@@ -78,6 +78,8 @@ impl Ui {
                     self.sub = 0;
                 }
             }
+            KeyCode::Up if self.step == Step::Target => self.cycle_disk(false),
+            KeyCode::Down if self.step == Step::Target => self.cycle_disk(true),
             KeyCode::Up => {
                 self.sel = self.rows().saturating_sub(self.sel + 1);
             }
@@ -86,6 +88,8 @@ impl Ui {
                     self.sel += 1;
                 }
             }
+            KeyCode::Left if self.step == Step::Target => self.cycle_disk(false),
+            KeyCode::Right if self.step == Step::Target => self.cycle_disk(true),
             KeyCode::Left if self.step == Step::Users => self.sub = 0,
             KeyCode::Right if self.step == Step::Users => self.sub = 1,
             KeyCode::Left | KeyCode::Right => self.cycle(),
@@ -138,6 +142,20 @@ impl Ui {
             }
             _ => {}
         }
+    }
+    fn cycle_disk(&mut self, forward: bool) {
+        let disks = crate::target::probe_disks();
+        if disks.is_empty() {
+            return;
+        }
+        let cur = &self.draft.target_disk;
+        let pos = disks.iter().position(|d| d.path.to_string_lossy() == *cur);
+        let next = match pos {
+            Some(i) if forward => (i + 1) % disks.len(),
+            Some(i) => (i + disks.len() - 1) % disks.len(),
+            None => 0,
+        };
+        self.draft.target_disk = disks[next].path.to_string_lossy().to_string();
     }
 
     /// The editable string under the cursor (the selected row's
@@ -252,14 +270,13 @@ impl Ui {
                     }
                 }
             }
-            Step::Services => {
-                if self.sel < self.draft.services.len() {
+            Step::Services
+                if self.sel < self.draft.services.len() => {
                     self.draft.services.remove(self.sel);
                     if self.sel > 0 {
                         self.sel -= 1;
                     }
                 }
-            }
             _ => {}
         }
     }

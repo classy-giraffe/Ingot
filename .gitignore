@@ -5,6 +5,7 @@ image/mkosi.conf.d/
 # python
 __pycache__/
 *.pyc
+.venv/
 # rust build artifacts
 src/target/
 

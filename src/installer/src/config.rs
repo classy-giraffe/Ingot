@@ -23,12 +23,26 @@ pub use render::render;
 /// validation phase checks it against the installed release.
 pub const DEFAULT_SHELL: &str = "/usr/bin/nushell";
 
+/// OS payload source mode (11.4.2; live: spec 10.2). `artifacts`
+/// deploys the prebuilt whole-image artifact set from `source.base`;
+/// `live` runs on the live ISO - the payload is the running release's
+/// erofs and the mounted ISO media under `source.base` carries the
+/// release artifacts the installer deploys (the installed UKI and the
+/// ESP tree). Live mode takes no `version`: the running release is
+/// the source release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceMode {
+    Artifacts,
+    Live,
+}
+
 /// The parsed and validated install config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     // 11.4.1 target disk
     pub target_disk: String,
     // 11.4.2 OS image source
+    pub source_mode: SourceMode,
     pub source_base: String,
     pub version: Version,
     // 11.4.3-5 system identity
@@ -131,7 +145,7 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
     }
 
     let target_disk = parse_target(doc, &mut errs);
-    let (source_base, version) = parse_source(doc, &mut errs);
+    let (source_mode, source_base, version) = parse_source(doc, &mut errs);
     let (hostname, timezone, locale, keymap) = parse_system(doc, &mut errs);
     let (esp, slot_a, slot_b, var, home) = parse_partitions(doc, &mut errs);
     let (fs_slot, fs_var, fs_home) = parse_filesystems(doc, &mut errs);
@@ -145,6 +159,7 @@ pub fn parse(text: &str) -> Result<Config, Vec<String>> {
     }
     Ok(Config {
         target_disk,
+        source_mode,
         source_base,
         version,
         hostname,

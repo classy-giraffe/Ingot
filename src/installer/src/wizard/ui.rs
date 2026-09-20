@@ -15,8 +15,10 @@ use crossterm::event::{self, Event, KeyEventKind};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-mod ui_key;
 mod ui_draw;
+mod ui_key;
+mod ui_review;
+mod ui_steps;
 
 /// What the wizard mode ended with (drives the process exit code).
 #[derive(Clone)]
@@ -32,6 +34,7 @@ pub enum Outcome {
 const POLL: Duration = Duration::from_millis(50);
 
 /// The wizard screens.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
     /// One of the ten Steps (the review is the last Step).
     Step,

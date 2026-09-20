@@ -10,8 +10,8 @@ fn tmp(tag: &str) -> std::path::PathBuf {
 #[test]
 fn defaults_match_the_workstation_profile() {
     let d = Draft::new();
-    // The operator's only required inputs: target disk and source.
-    assert!(d.target_disk.is_empty());
+    // Target disk is auto-probed from /sys/block (starts with /dev/ or empty if none).
+    assert!(d.target_disk.is_empty() || d.target_disk.starts_with("/dev/"));
     assert_eq!(d.source_base, "dist");
     // The test runs with the crate directory as CWD, which carries
     // no dist/: no discoverable version.
@@ -77,6 +77,32 @@ fn config_validates_and_parses_the_default_draft() {
     // path the engine re-parses.
     let reparsed = crate::config::parse(&crate::config::render(&cfg)).unwrap();
     assert_eq!(reparsed, cfg);
+}
+
+#[test]
+fn config_detects_live_source_mode_and_roundtrips() {
+    let dir = tmp("live-draft");
+    let erofs = dir.join(crate::source::LIVE_EROFS);
+    std::fs::create_dir_all(erofs.parent().unwrap()).unwrap();
+    std::fs::write(&erofs, b"fake-erofs").unwrap();
+
+    let mut d = Draft::new();
+    d.target_disk = "/dev/vda".into();
+    d.source_base = dir.to_string_lossy().to_string();
+    d.version = "0.1.0".into();
+
+    let cfg = d.config().expect("live draft should validate cleanly");
+    assert_eq!(cfg.source_mode, crate::config::SourceMode::Live);
+    assert_eq!(cfg.source_base, dir.to_string_lossy());
+
+    let rendered = crate::config::render(&cfg);
+    assert!(rendered.contains("mode = \"live\""));
+    assert!(!rendered.contains("version ="));
+
+    let reparsed = crate::config::parse(&rendered).unwrap();
+    assert_eq!(reparsed.source_mode, crate::config::SourceMode::Live);
+    assert_eq!(reparsed.source_base, dir.to_string_lossy());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

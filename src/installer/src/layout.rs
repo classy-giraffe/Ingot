@@ -15,8 +15,6 @@ use config::{Config, StateFs};
 use size::ByteSize;
 use version::Version;
 
-/// One mebibyte.
-
 /// First partition offset (after the protective MBR and align gap).
 pub const FIRST_OFFSET: u64 = size::MIB;
 
@@ -129,9 +127,8 @@ pub fn compute(cfg: &Config) -> Layout {
     let roles = [Role::Esp, Role::SlotA, Role::SlotB, Role::Var, Role::Home];
     let mut offset = FIRST_OFFSET;
     let mut partitions = Vec::with_capacity(roles.len());
-    let mut index = 0u32;
-    for role in roles {
-        index += 1;
+    for (i, role) in roles.into_iter().enumerate() {
+        let index = (i + 1) as u32;
         let size = role.size(cfg).0;
         let label = match role {
             Role::Esp => "esp".to_string(),
@@ -156,7 +153,7 @@ pub fn compute(cfg: &Config) -> Layout {
     // GPT tail metadata needs a little room; require 1 MiB headroom.
     let required_disk_bytes = used_bytes + size::MIB;
     Layout {
-        version: cfg.version.clone(),
+        version: cfg.version,
         partitions,
         used_bytes,
         required_disk_bytes,

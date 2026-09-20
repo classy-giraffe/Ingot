@@ -170,4 +170,15 @@ cargo build --release --locked --offline \
 install -D -m 0755 /usr/src/ingot/target/release/ingot-update-helper \
     "$DESTDIR/usr/bin/ingot-update-helper"
 echo "ingot: ingot-update-helper built and staged to /usr/bin/ingot-update-helper" >&2
+# --- ingot-installer: the declarative install engine (spec 7.1, 11).
+# Same discipline as the update helper. It lands in the slot payload:
+# the live ISO (whose rootfs IS the slot erofs) runs it unattended
+# from a declarative config disk (spec 10.2.5: the ISO includes the
+# installer and deployment tooling); the installed system carries it
+# as well (single payload).
+cargo build --release --locked --offline \
+    --manifest-path /usr/src/ingot/Cargo.toml --bin ingot-installer
+install -D -m 0755 /usr/src/ingot/target/release/ingot-installer \
+    "$DESTDIR/usr/bin/ingot-installer"
+echo "ingot: ingot-installer built and staged to /usr/bin/ingot-installer" >&2
 echo "ingot: brush ${BRUSH_SHA} built and staged to /usr/bin/brush (/bin/sh)" >&2

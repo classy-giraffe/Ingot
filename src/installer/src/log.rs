@@ -62,7 +62,7 @@ impl InstallLog {
             detail,
         };
         let mut line = serde_json::to_string(&ev)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         line.push('\n');
         let mut f = fs::OpenOptions::new()
             .create(true)

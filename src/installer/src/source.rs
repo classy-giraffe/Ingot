@@ -14,7 +14,7 @@
 //! If a `.sha256` sidecar (sha256sum format: `<hex>  <name>`) sits
 //! next to an artifact, the artifact's checksum is verified.
 
-use crate::version::Version;
+use crate::version::{self, Version};
 use sha2::Digest;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -84,7 +84,6 @@ pub fn sha256_file(path: &Path) -> Result<String, String> {
 }
 
 /// Resolves the full artifact set for a version under `base`.
-/// Errors name the missing file.
 pub fn resolve(base: &Path, version: &Version) -> Result<Vec<Artifact>, String> {
     let mut out = Vec::with_capacity(KINDS.len());
     for kind in KINDS {
@@ -107,6 +106,97 @@ pub fn resolve(base: &Path, version: &Version) -> Result<Vec<Artifact>, String> 
     }
     Ok(out)
 }
+/// The live payload source (spec 10.2, live ISO): the running
+/// release on a mounted ISO media. The media layout (the ISO build's
+/// output):
+///
+/// | what         | path                             |
+/// |--------------|----------------------------------|
+/// | slot erofs   | `LiveOS/rootfs.erofs`            |
+/// | installed UKI| `esp/EFI/Linux/ingot_<v>.efi`    |
+/// | ESP tree     | `esp/`                           |
+///
+/// The slot erofs IS the running /usr (the live payload); deploying
+/// it to slot A makes the installed system run the same release. The
+/// `esp/` tree is the installed machine's ESP (systemd-boot fallback,
+/// the installed UKI, the loader config) - the live boot's own ESP
+/// tree (at the media root) additionally carries the live UKI and a
+/// live-default loader.conf, and is not what the install deploys.
+#[derive(Debug, Clone)]
+pub struct LiveSource {
+    /// The running release's erofs payload (deployed to slot A).
+    pub erofs: PathBuf,
+    /// The installed UKI (validated for the fixed PARTUUIDs).
+    pub uki: PathBuf,
+    /// The installed ESP tree (copied onto the formatted ESP).
+    pub esp_tree: PathBuf,
+    /// sha256 of the erofs payload (deployment verification).
+    pub erofs_sha: String,
+    /// sha256 of the installed UKI.
+    pub uki_sha: String,
+}
+
+/// The live payload path on the ISO media (spec 10.3 layout).
+pub const LIVE_EROFS: &str = "LiveOS/rootfs.erofs";
+
+/// Resolves the live payload source under the mounted ISO media
+/// `base` for `version`. Errors name the missing file.
+pub fn resolve_live(base: &Path, version: &Version) -> Result<LiveSource, String> {
+    let erofs = base.join(LIVE_EROFS);
+    let esp_tree = base.join("esp");
+    let uki = esp_tree
+        .join("EFI/Linux")
+        .join(format!("ingot_{version}.efi"));
+    for p in [&erofs, &uki] {
+        if !p.is_file() {
+            return Err(format!(
+                "live source: {} not found under {}",
+                p.display(),
+                base.display()
+            ));
+        }
+    }
+    if !esp_tree.is_dir() {
+        return Err(format!(
+            "live source: ESP tree {} not found under {}",
+            esp_tree.display(),
+            base.display()
+        ));
+    }
+    let erofs_sha = sha256_file(&erofs)
+        .map_err(|e| format!("live source: cannot hash {}: {e}", erofs.display()))?;
+    let uki_sha = sha256_file(&uki)
+        .map_err(|e| format!("live source: cannot hash {}: {e}", uki.display()))?;
+    Ok(LiveSource {
+        erofs,
+        uki,
+        esp_tree,
+        erofs_sha,
+        uki_sha,
+    })
+}
+
+/// The running release version from the os-release of the system the
+/// installer runs on (live source mode: the running release is the
+/// source release). Reads /usr/lib/os-release (falling back to
+/// /etc/os-release) and parses its `VERSION_ID` line.
+pub fn running_version() -> Result<Version, String> {
+    let text = fs::read_to_string("/usr/lib/os-release")
+        .or_else(|_| fs::read_to_string("/etc/os-release"))
+        .map_err(|e| format!("live source: cannot read os-release: {e}"))?;
+    parse_os_release(&text)
+        .ok_or_else(|| "live source: no VERSION_ID in os-release".to_string())
+}
+
+/// Parses `VERSION_ID` out of an os-release document (the pure half
+/// of [`running_version`], unit-testable).
+pub fn parse_os_release(text: &str) -> Option<Version> {
+    text.lines()
+        .find_map(|l| l.strip_prefix("VERSION_ID="))
+        .map(|v| v.trim_matches('"').to_string())
+        .and_then(|v| version::parse(&v).ok())
+}
+
 
 /// The Ingot versions with a slot artifact present under `base`,
 /// newest first. The wizard's default version source; entries that
@@ -130,11 +220,10 @@ pub fn available_versions(base: &Path) -> Vec<Version> {
         let Ok(m) = e.metadata() else {
             continue;
         };
-        if m.is_file() {
-            if let Ok(v) = crate::version::parse(v) {
+        if m.is_file()
+            && let Ok(v) = crate::version::parse(v) {
                 out.push(v);
             }
-        }
     }
     out.sort_by(|a, b| b.cmp(a));
     out
@@ -223,4 +312,86 @@ mod tests {
         assert_eq!(a.check_sha256().unwrap(), None);
         let _ = fs::remove_dir_all(&d);
     }
+
+    /// A fixture media: the live payload erofs and the installed ESP
+    /// tree (with the versioned UKI).
+    fn live_media(d: &Path, version: &str) {
+        let erofs = d.join(LIVE_EROFS);
+        fs::create_dir_all(erofs.parent().unwrap()).unwrap();
+        fs::write(&erofs, b"erofs").unwrap();
+        let uki = d
+            .join("esp")
+            .join("EFI/Linux")
+            .join(format!("ingot_{version}.efi"));
+        fs::create_dir_all(uki.parent().unwrap()).unwrap();
+        fs::write(&uki, b"uki").unwrap();
+        fs::create_dir_all(d.join("esp/loader")).unwrap();
+        fs::write(d.join("esp/loader/loader.conf"), "timeout 3\n").unwrap();
+    }
+
+    #[test]
+    fn resolve_live_finds_media_files() {
+        let d = tmp("live");
+        let v = Version {
+            major: 0,
+            minor: 1,
+            patch: 0,
+        };
+        live_media(&d, "0.1.0");
+        let s = resolve_live(&d, &v).unwrap();
+        assert_eq!(s.erofs, d.join(LIVE_EROFS));
+        assert_eq!(
+            s.uki,
+            d.join("esp/EFI/Linux/ingot_0.1.0.efi")
+        );
+        assert_eq!(s.esp_tree, d.join("esp"));
+        assert_eq!(s.erofs_sha, sha256_file(&d.join(LIVE_EROFS)).unwrap());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn resolve_live_names_the_missing_file() {
+        let d = tmp("live-missing");
+        let v = Version {
+            major: 0,
+            minor: 1,
+            patch: 0,
+        };
+        live_media(&d, "0.1.0");
+        fs::remove_file(d.join(LIVE_EROFS)).unwrap();
+        let e = resolve_live(&d, &v).unwrap_err();
+        assert!(e.contains(LIVE_EROFS), "{e}");
+        // restore the payload; drop the UKI -> the UKI is named
+        fs::write(d.join(LIVE_EROFS), b"erofs").unwrap();
+        fs::remove_file(d.join("esp/EFI/Linux/ingot_0.1.0.efi")).unwrap();
+        let e = resolve_live(&d, &v).unwrap_err();
+        assert!(e.contains("ingot_0.1.0.efi"), "{e}");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn parse_os_release_reads_version_id() {
+        assert_eq!(
+            parse_os_release("NAME=Ingot\nVERSION_ID=\"0.1.0\"\nID=ingot\n"),
+            Some(Version {
+                major: 0,
+                minor: 1,
+                patch: 0
+            })
+        );
+        assert_eq!(
+            parse_os_release("ID=ingot\n"),
+            None
+        );
+        // unquoted VERSION_ID also parses
+        assert_eq!(
+            parse_os_release("VERSION_ID=1.2.3\n"),
+            Some(Version {
+                major: 1,
+                minor: 2,
+                patch: 3
+            })
+        );
+    }
+
 }

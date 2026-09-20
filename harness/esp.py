@@ -17,6 +17,10 @@ from pathlib import Path
 import bootstate
 import gpt
 
+try:
+    from virt.firmware.varstore import autodetect as _fw_autodetect
+except ImportError:
+    _fw_autodetect = None
 ESP_LABEL = "esp"
 MTOOLS_ENV = {**os.environ, "MTOOLS_SKIP_CHECK": "1"}
 
@@ -163,3 +167,22 @@ def esp_forensics(img):
         "loader_conf": conf,
         "default": bootstate.default_entry(entries),
     }
+
+
+def read_nvram_vars(vars_fd: Path | str) -> dict[str, str]:
+    """Read UEFI variables from an OVMF variable store (.fd file).
+
+    Returns a dict mapping variable name to a string summary of its value.
+    Returns empty dict if virt-firmware is unavailable or file is missing.
+    """
+    p = Path(vars_fd)
+    if _fw_autodetect is None or not p.exists():
+        return {}
+    try:
+        vs = _fw_autodetect.open_varstore(str(p))
+        if vs is None:
+            return {}
+        vl = vs.get_varlist()
+        return {name: str(var) for name, var in vl.items()}
+    except Exception:
+        return {}

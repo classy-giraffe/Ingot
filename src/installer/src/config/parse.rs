@@ -30,21 +30,60 @@ pub(super) fn parse_target(doc: &toml::Table, errs: &mut Vec<String>) -> String 
     target_disk
 }
 /// 11.4 category parse: source.
-pub(super) fn parse_source(doc: &toml::Table, errs: &mut Vec<String>) -> (String, Version) {
+///
+/// `mode` selects the payload source: `artifacts` (the default)
+/// deploys the prebuilt whole-image artifact set from `base` for the
+/// given `version`; `live` (spec 10.2) runs the installer on the live
+/// ISO, where `base` is the mounted ISO media carrying the running
+/// release's erofs (LiveOS/rootfs.erofs) and the release artifacts
+/// the install deploys (the installed UKI and the ESP tree under
+/// esp/). Live mode takes no `version`: the running release is the
+/// source release (the engine resolves it from the running
+/// os-release).
+pub(super) fn parse_source(
+    doc: &toml::Table,
+    errs: &mut Vec<String>,
+) -> (SourceMode, String, Version) {
     // 11.4.2 OS image source
-    let (source_base, version) = match doc.get("source") {
+    let (mode, source_base, version) = match doc.get("source") {
         None => {
-            errs.push("category '[source]' missing (required: base, version)".into());
-            (String::new(), Version::default())
+            errs.push(
+                "category '[source]' missing (required: base, version; or mode = \"live\")".into(),
+            );
+            (SourceMode::Artifacts, String::new(), Version::default())
         }
         Some(v) => match table(v, "source", errs) {
-            None => (String::new(), Version::default()),
+            None => (SourceMode::Artifacts, String::new(), Version::default()),
             Some(t) => {
-                unknown_keys(t, "source", &["base", "version"], errs);
+                unknown_keys(t, "source", &["mode", "base", "version"], errs);
+                let mode = match t.get("mode") {
+                    None => SourceMode::Artifacts,
+                    Some(toml::Value::String(s)) => match s.as_str() {
+                        "artifacts" => SourceMode::Artifacts,
+                        "live" => SourceMode::Live,
+                        other => {
+                            errs.push(format!(
+                                "[source] key 'mode' must be \"artifacts\" or \"live\" (got {other:?})"
+                            ));
+                            SourceMode::Artifacts
+                        }
+                    },
+                    Some(v) => {
+                        errs.push(format!("[source] key 'mode' must be a string ({v})"));
+                        SourceMode::Artifacts
+                    }
+                };
                 let base = str_key(t, "source", "base", errs);
                 let v = match t.get("version") {
+                    None if mode == SourceMode::Live => Version::default(),
                     None => {
                         errs.push("[source] key 'version' missing".into());
+                        Version::default()
+                    }
+                    Some(toml::Value::String(s)) if mode == SourceMode::Live => {
+                        errs.push(
+                            "[source] key 'version' is not allowed in live mode (the running release is the source release)".into(),
+                        );
                         Version::default()
                     }
                     Some(toml::Value::String(s)) => match version::parse(s.as_str()) {
@@ -59,11 +98,11 @@ pub(super) fn parse_source(doc: &toml::Table, errs: &mut Vec<String>) -> (String
                         Version::default()
                     }
                 };
-                (base, v)
+                (mode, base, v)
             }
         },
     };
-    (source_base, version)
+    (mode, source_base, version)
 }
 /// 11.4 category parse: system.
 pub(super) fn parse_system(
@@ -228,7 +267,8 @@ pub(super) fn parse_encryption(
 /// 11.4 category parse: users.
 pub(super) fn parse_users(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<User> {
     // 11.4.9 initial users
-    let users = match doc.get("users") {
+    
+    match doc.get("users") {
         None => {
             errs.push(
                 "category '[[users]]' missing (at least one initial user is required)".into(),
@@ -292,13 +332,13 @@ pub(super) fn parse_users(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<User
             ));
             Vec::new()
         }
-    };
-    users
+    }
 }
 /// 11.4 category parse: ssh.
 pub(super) fn parse_ssh(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<String> {
     // 11.4.10 SSH authorized keys
-    let ssh_keys = match doc.get("ssh") {
+    
+    match doc.get("ssh") {
         None => {
             errs.push("category '[ssh]' missing (required: authorized_keys)".into());
             Vec::new()
@@ -307,7 +347,8 @@ pub(super) fn parse_ssh(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<String
             None => Vec::new(),
             Some(t) => {
                 unknown_keys(t, "ssh", &["authorized_keys"], errs);
-                let keys = match t.get("authorized_keys") {
+                
+                match t.get("authorized_keys") {
                     None => {
                         errs.push("[ssh] key 'authorized_keys' missing".into());
                         Vec::new()
@@ -336,17 +377,16 @@ pub(super) fn parse_ssh(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<String
                         ));
                         Vec::new()
                     }
-                };
-                keys
+                }
             }
         },
-    };
-    ssh_keys
+    }
 }
 /// 11.4 category parse: services.
 pub(super) fn parse_services(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<String> {
     // 11.4.11 service enablement policy
-    let services = match doc.get("services") {
+    
+    match doc.get("services") {
         None => {
             errs.push("category '[services]' missing (required: enabled)".into());
             Vec::new()
@@ -355,7 +395,8 @@ pub(super) fn parse_services(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<S
             None => Vec::new(),
             Some(t) => {
                 unknown_keys(t, "services", &["enabled"], errs);
-                let units = match t.get("enabled") {
+                
+                match t.get("enabled") {
                     None => {
                         errs.push("[services] key 'enabled' missing".into());
                         Vec::new()
@@ -384,10 +425,8 @@ pub(super) fn parse_services(doc: &toml::Table, errs: &mut Vec<String>) -> Vec<S
                         ));
                         Vec::new()
                     }
-                };
-                units
+                }
             }
         },
-    };
-    services
+    }
 }

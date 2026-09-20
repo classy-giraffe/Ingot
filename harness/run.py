@@ -14,6 +14,11 @@ run_ab.py imports ``boot_disk()`` for multi-boot scenarios.
 Usage: run.py [--disk PATH] [--no-probe] [--timeout SECS] [--work DIR]
 """
 
+try:
+    import asyncio
+    import qemu.qmp as _qmp
+except ImportError:
+    _qmp = None
 import argparse
 import hashlib
 import json
@@ -70,9 +75,29 @@ def load_pins():
     return pins
 
 
-def powerdown(monitor_sock):
-    """Graceful ACPI powerdown via the HMP monitor; True if the monitor
-    accepted the command."""
+def qmp_powerdown(qmp_sock) -> bool:
+    """Graceful ACPI powerdown via QMP; True on success."""
+    if _qmp is None or not Path(qmp_sock).exists():
+        return False
+    async def _run():
+        client = _qmp.QMPClient("harness")
+        try:
+            await client.connect(str(qmp_sock))
+            await client.execute("system_powerdown")
+            await client.disconnect()
+            return True
+        except Exception:
+            return False
+    try:
+        return asyncio.run(_run())
+    except Exception:
+        return False
+
+
+def powerdown(monitor_sock, qmp_sock=None):
+    """Graceful ACPI powerdown via QMP (if available) or HMP monitor."""
+    if qmp_sock and qmp_powerdown(qmp_sock):
+        return True
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(5)
@@ -99,8 +124,9 @@ def boot_disk(disk, workdir, ovmf, timeout=420, mode="probe", marker=None):
     workdir.mkdir(parents=True, exist_ok=True)
     console_path = workdir / "console.log"
     monitor_sock = workdir / "monitor.sock"
+    qmp_sock = workdir / "qmp.sock"
     vars_fd = workdir / "vars.fd"
-    for f in (console_path, monitor_sock):
+    for f in (console_path, monitor_sock, qmp_sock):
         f.unlink(missing_ok=True)
     shutil.copyfile(ovmf["vars"], vars_fd)
 
@@ -118,6 +144,7 @@ def boot_disk(disk, workdir, ovmf, timeout=420, mode="probe", marker=None):
         "-device", "virtio-net-pci,netdev=net0",
         "-serial", f"file:{console_path}",
         "-monitor", f"unix:{monitor_sock},server,nowait",
+        "-qmp", f"unix:{qmp_sock},server,nowait",
         "-display", "none",
         "-no-reboot",
     ]
@@ -144,7 +171,7 @@ def boot_disk(disk, workdir, ovmf, timeout=420, mode="probe", marker=None):
     if found:
         if mode == "probe":
             time.sleep(BLESS_SETTLE_S)
-        powerdown(monitor_sock)
+        powerdown(monitor_sock, qmp_sock)
         deadline_end = time.monotonic() + 60
         while qemu.poll() is None and time.monotonic() < deadline_end:
             time.sleep(1)

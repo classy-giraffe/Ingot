@@ -57,6 +57,67 @@ fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// A discovered block device on the host system.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredDisk {
+    pub path: PathBuf,
+    pub name: String,
+    pub size_bytes: u64,
+    pub read_only: bool,
+    pub model: String,
+}
+
+impl DiscoveredDisk {
+    pub fn size_human(&self) -> String {
+        crate::size::human_approx(self.size_bytes)
+    }
+}
+/// Discovers candidate target block devices by inspecting `/sys/block`.
+/// Sorts writable disks first (largest to smallest), then read-only media.
+pub fn probe_disks() -> Vec<DiscoveredDisk> {
+    let mut disks = Vec::new();
+    let sys_block = Path::new("/sys/block");
+    let Ok(entries) = fs::read_dir(sys_block) else {
+        return disks;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with("loop")
+            || name.starts_with("ram")
+            || name.starts_with("dm-")
+            || name.starts_with("md")
+        {
+            continue;
+        }
+        let b = entry.path();
+        let ro = fs::read_to_string(b.join("ro"))
+            .map(|s| s.trim() == "1")
+            .unwrap_or(false);
+        let size_sectors: u64 = fs::read_to_string(b.join("size"))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        let model = fs::read_to_string(b.join("device/model"))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        let path = PathBuf::from(format!("/dev/{name}"));
+        disks.push(DiscoveredDisk {
+            path,
+            name,
+            size_bytes: size_sectors * 512,
+            read_only: ro,
+            model,
+        });
+    }
+    disks.sort_by(|a, b| {
+        a.read_only
+            .cmp(&b.read_only)
+            .then_with(|| b.size_bytes.cmp(&a.size_bytes))
+    });
+    disks
+}
+
 /// True when `path` names a block device (has a /sys/block entry).
 pub(crate) fn is_block_device(path: &Path) -> bool {
     match path.file_name() {
@@ -253,7 +314,6 @@ impl DiskTarget {
     pub fn partition_by_uuid(&self, uuid: &str, timeout_secs: u64) -> Result<PathBuf, String> {
         let name = self.sysfs_name();
         let base = format!("/sys/block/{name}");
-        let prefix = format!("{name}p");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
         loop {
             let entries = match fs::read_dir(&base) {
@@ -267,7 +327,11 @@ impl DiskTarget {
             };
             for e in entries.flatten() {
                 let n = e.file_name().to_string_lossy().to_string();
-                if !n.starts_with(&prefix) {
+                let Some(rest) = n.strip_prefix(&name) else {
+                    continue;
+                };
+                let rest = rest.strip_prefix('p').unwrap_or(rest);
+                if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()) {
                     continue;
                 }
                 let dev = format!("/dev/{n}");
@@ -318,20 +382,18 @@ impl DiskTarget {
         let mut first_err: Option<String> = None;
         for dir in self.mounts.iter().rev() {
             let d = dir.to_string_lossy().to_string();
-            if let Err(e) = run("umount", &[&d]) {
-                if first_err.is_none() {
+            if let Err(e) = run("umount", &[&d])
+                && first_err.is_none() {
                     first_err = Some(e);
                 }
-            }
         }
         self.mounts.clear();
         if let Some(loop_dev) = &self.loop_dev {
             let d = loop_dev.to_string_lossy().to_string();
-            if let Err(e) = run("losetup", &["-d", &d]) {
-                if first_err.is_none() {
+            if let Err(e) = run("losetup", &["-d", &d])
+                && first_err.is_none() {
                     first_err = Some(e);
                 }
-            }
         }
         self.loop_dev = None;
         match first_err {

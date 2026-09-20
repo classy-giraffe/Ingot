@@ -78,19 +78,34 @@ fn overflow(s: &str) -> String {
 
 /// True if the size is a non-zero multiple of one mebibyte.
 pub fn is_mib_multiple(s: ByteSize) -> bool {
-    s.0 > 0 && s.0 % MIB == 0
+    s.0 > 0 && s.0.is_multiple_of(MIB)
 }
 
 /// Human-readable size for plan reports (e.g. `8 GiB`, `512 MiB`,
 /// `1.5 GiB`-style values fall back to bytes).
 pub fn human(bytes: u64) -> String {
-    if bytes >= (1 << 30) && bytes % (1 << 30) == 0 {
+    if bytes >= (1 << 30) && bytes.is_multiple_of(1 << 30) {
         return format!("{} GiB", bytes >> 30);
     }
-    if bytes >= MIB && bytes % MIB == 0 {
+    if bytes >= MIB && bytes.is_multiple_of(MIB) {
         return format!("{} MiB", bytes / MIB);
     }
     format!("{bytes} B")
+}
+
+/// Human-readable approximate size for device listings (e.g. `32 GiB`, `1.2 GiB`, `512 MiB`).
+pub fn human_approx(bytes: u64) -> String {
+    let gb = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    if gb >= 1.0 {
+        if gb.fract() < 0.05 {
+            format!("{:.0} GiB", gb)
+        } else {
+            format!("{:.1} GiB", gb)
+        }
+    } else {
+        let mb = bytes as f64 / (1024.0 * 1024.0);
+        format!("{:.0} MiB", mb)
+    }
 }
 
 #[cfg(test)]

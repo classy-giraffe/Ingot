@@ -1,22 +1,25 @@
 """gpt.py - pure-Python GPT reader for the Ingot harness.
 
-Reads the protective-MBR layout of a raw disk image: primary and backup
-headers, and both partition entry arrays. Integrity is enforced the way
-the UEFI spec does it where the toolchain agrees with it:
+Reads the protective-MBR layout of a raw disk image or an isohybrid ISO:
+primary and backup headers, and both partition entry arrays. The entry
+count, entry size, and array positions come from the headers (the UEFI
+spec fields), so both toolchain flavors parse: libfdisk/sgdisk (128
+entries, 16 KiB arrays at LBA 2 and last-32) and xorriso's isohybrid
+GPT (248 entries, 62-sector arrays, backup array at the 248-entry
+offset before the backup header). Integrity is enforced the way the
+UEFI spec does it where the toolchain agrees with it:
 
 - each entry array is CRC32-verified against its header's partition
   array CRC field (header offset 88);
 - primary and backup headers are cross-checked field by field (they
   must be identical except the header CRC, the current/alternate LBA
   pointers, and the per-header entry-array pointer);
-- the arrays sit where the spec puts them: primary at LBA 2, backup
-  in the 32 sectors before the backup header.
+- the primary array sits at LBA 2 (spec), and the backup array fits
+  entirely before the backup header at the LBA its header names.
 
 Notes on recent libfdisk/sgdisk (1.0.10 generation, as pinned for the
 host tooling): the header's partition CRC field (offset 16) is written
-with a non-spec formula, so it is not used for verification; and
-``part_last`` carries a sentinel (0x8000000080), so only its
-primary/backup equality is checked.
+with a non-spec formula, so it is not used for verification.
 
 GPT stores UUIDs in mixed endian: the first three fields (4+2+2 bytes)
 are little-endian, the last two (8 bytes) big-endian.
@@ -29,10 +32,10 @@ from pathlib import Path
 
 SECTOR = 512
 GPT_MAGIC = b"EFI PART"
-N_ENTRIES = 128
-ENTRY_SIZE = 128
-ARRAY_SECTORS = N_ENTRIES * ENTRY_SIZE // SECTOR  # 32
-# LBA 0: protective MBR, LBA 1: primary header, LBA 2..33: primary entries.
+# The entry count, entry size, and array positions are read from the
+# headers (the UEFI spec fields); toolchains differ: libfdisk/sgdisk
+# write 128 entries, xorriso's isohybrid GPT writes 248.
+# LBA 0: protective MBR, LBA 1: primary header, LBA 2: primary entries.
 PRIMARY_HEADER_LBA = 1
 PRIMARY_ENTRIES_LBA = 2
 MIN_SECTORS = 34
@@ -97,14 +100,18 @@ def _header(header: bytes, sector: int) -> dict:
         "last_usable": struct.unpack_from("<Q", header, 48)[0],
         "disk_guid": _uuid(header[56:72]),
         "part_first": struct.unpack_from("<Q", header, 72)[0],
+        "n_entries": struct.unpack_from("<I", header, 80)[0],
+        "entry_size": struct.unpack_from("<I", header, 84)[0],
+        # The libfdisk/sgdisk 8-byte composite at 80 (entry size high,
+        # entry count low) - kept for the primary/backup cross-check.
         "part_last": struct.unpack_from("<Q", header, 80)[0],
     }
 
 
-def _entries(table: bytes) -> list:
+def _entries(table: bytes, n_entries: int, entry_size: int) -> list:
     entries = []
-    for i in range(N_ENTRIES):
-        e = i * ENTRY_SIZE
+    for i in range(n_entries):
+        e = i * entry_size
         type_uuid = _uuid(table[e:e + 16])
         if type_uuid == ZERO_TYPE:
             continue
@@ -147,7 +154,7 @@ def _pread(f, off: int, count: int) -> bytes:
 
 def read_gpt(path) -> Gpt:
     # Only the GPT regions are read: the 512B headers at LBA 1 and the
-    # last LBA, and the 16KiB entry arrays at LBA 2 and last-32. The
+    # last LBA, and the entry arrays at the LBAs the headers name. The
     # harness disk is ~29GiB; reading the whole image OOMs the process.
     with Path(path).open("rb") as f:
         size = os.fstat(f.fileno()).st_size
@@ -159,19 +166,23 @@ def read_gpt(path) -> Gpt:
                           PRIMARY_HEADER_LBA)
         backup = _header(_pread(f, last_lba * SECTOR, SECTOR), last_lba)
 
-        # UEFI spec placement: primary array at LBA 2; backup array is the
-        # 32 sectors immediately before the backup header.
+        # Placement: the primary array sits at LBA 2 (UEFI spec). The
+        # backup array sits at the LBA its header names; it must start
+        # in the usable range and fit entirely before the backup header
+        # (libfdisk puts it 32 sectors up, xorriso's 248-entry array 62).
         if primary["part_first"] != PRIMARY_ENTRIES_LBA:
             raise GptError("GPT primary entry array not at LBA 2")
-        if backup["part_first"] != last_lba - ARRAY_SECTORS:
+        backup_bytes = backup["n_entries"] * backup["entry_size"]
+        if (backup["part_first"] < backup["first_usable"]
+                or backup["part_first"] * SECTOR + backup_bytes
+                > last_lba * SECTOR):
             raise GptError("GPT backup entry array misplaced")
 
         # Cross-check primary and backup: identical except the header CRC,
         # the current/alternate LBA pointers, and part_first (each header
-        # points at its own array). part_last carries a libfdisk sentinel
-        # in recent toolchains, so only its equality is checked.
+        # points at its own array).
         for key in ("revision", "header_size", "first_usable", "last_usable",
-                    "disk_guid", "part_last"):
+                    "disk_guid", "n_entries", "entry_size", "part_last"):
             if primary[key] != backup[key]:
                 raise GptError(f"GPT primary/backup header mismatch on {key}")
         if primary["my_lba"] != PRIMARY_HEADER_LBA or backup["my_lba"] != last_lba:
@@ -181,15 +192,17 @@ def read_gpt(path) -> Gpt:
 
         table = None
         for hdr, tag in ((primary, "primary"), (backup, "backup")):
+            count = hdr["n_entries"] * hdr["entry_size"]
             off = hdr["part_first"] * SECTOR
-            end = off + ARRAY_SECTORS * SECTOR
+            end = off + count
             if end > size:
                 raise GptError(f"GPT {tag} entry array out of bounds")
-            arr = _pread(f, off, ARRAY_SECTORS * SECTOR)
+            arr = _pread(f, off, count)
             crc = zlib.crc32(arr) & 0xFFFFFFFF
             if crc != hdr["part_crc"]:
                 raise GptError(f"GPT {tag} entry array CRC mismatch")
             if tag == "primary":
                 table = arr
 
-    return Gpt(path, primary["disk_guid"], _entries(table))
+    return Gpt(path, primary["disk_guid"],
+               _entries(table, primary["n_entries"], primary["entry_size"]))

@@ -1,0 +1,17 @@
+[Unit]
+# OpenSSH host keys (first boot): the factory /etc baseline ships the
+# sshd configuration but not the host keys (the package scriptlet
+# generates build-host keys at image build time; every machine needs
+# its own). Generate them once, before sshd starts; the unit is a
+# no-op on later boots (the keys exist).
+Description=Generate OpenSSH host keys (first boot)
+ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
+After=local-fs.target
+Before=sshd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+WantedBy=multi-user.target

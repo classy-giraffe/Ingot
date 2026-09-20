@@ -20,6 +20,10 @@
     "cert": {
       "path": "tools/keys/snakeoil.pem",
       "sha256": "d1ead44fc7748b8c26e0cba2141b0b54a379c0f11c4e593fbc5d7dd995f90265"
+    },
+    "live_key": {
+      "path": "tools/keys/live.key",
+      "sha256": "9ba59c30b570f2b0b65e8d7e6bd4cbb483a724fe4d4b0878a3c13091a030bb0a"
     }
   },
   "host_tools": {

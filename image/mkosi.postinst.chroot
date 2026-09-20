@@ -52,6 +52,82 @@ ln -s dbus-broker.service /usr/lib/systemd/system/dbus.service
 mkdir -p /usr/lib/systemd/system/sockets.target.wants
 ln -s ../dbus.socket /usr/lib/systemd/system/sockets.target.wants/dbus.socket
 
+# --- Workstation profile service set (spec 21.2, locked in #6) -------
+# Vendor enablement in the factory /etc baseline: materialized onto
+# /etc on first boot (installed) and onto the live /etc (live
+# initramfs). The profile's default service set = core systemd set +
+# persistent journal (the factory journald conf) + getty (tty1 and
+# the serial headless terminal, spec 10.2) + sshd (spec 18.5) +
+# networkd (spec 18.1).
+factory_etc=/usr/share/factory/etc
+mkdir -p "$factory_etc/systemd/system/multi-user.target.wants" \
+    "$factory_etc/systemd/system/getty.target.wants"
+ln -s ../sshd.service \
+    "$factory_etc/systemd/system/multi-user.target.wants/sshd.service"
+ln -s ../systemd-networkd.service \
+    "$factory_etc/systemd/system/multi-user.target.wants/systemd-networkd.service"
+ln -s ../getty@tty1.service \
+    "$factory_etc/systemd/system/getty.target.wants/getty@tty1.service"
+ln -s ../ingot-ssh-hostkeys.service \
+    "$factory_etc/systemd/system/multi-user.target.wants/ingot-ssh-hostkeys.service"
+ln -s ../getty@ttyS0.service \
+    "$factory_etc/systemd/system/getty.target.wants/getty@ttyS0.service"
+# Mask systemd-loop@.service: systemd-dissect is not installed in the
+# minimal image (part of systemd-container), and unmasked it fails on
+# block devices like the ISO cdrom /dev/sr0.
+ln -sf /dev/null "$factory_etc/systemd/system/systemd-loop@.service"
+
+# --- Account database and PAM factory baseline (spec 21.2, locked in
+#     #6: PAM/shadow/login paths). The runtime /etc is materialized
+#     from share/factory/etc (initramfs, first boot), and the login
+#     paths (sshd, getty, PAM) need the account database, the PAM
+#     stack and the NSS configuration at runtime - none of which is
+#     in the slot's /usr. Snapshot the package-provided /etc state at
+#     build time (deterministic: pinned compose). Root ships with a
+#     locked password; the live initramfs opens the console root for
+#     the live session (live only, ephemeral).
+if command -v authselect >/dev/null 2>&1; then
+    authselect select local --force || true
+fi
+for f in passwd shadow group nsswitch.conf login.defs securetty shells; do
+    [ -e "/etc/$f" ] || continue
+    cp -a "/etc/$f" "$factory_etc/"
+done
+sed -i 's|^root:x:0:0:root:/root:.*|root:x:0:0:root:/root:/usr/bin/nushell|' "$factory_etc/passwd"
+grep -qx '/usr/bin/nushell' "$factory_etc/shells" 2>/dev/null \
+    || printf '/usr/bin/nu\n/usr/bin/nushell\n' >> "$factory_etc/shells"
+cp -a /etc/pam.d "$factory_etc/"
+[ -d /etc/security ] && cp -a /etc/security "$factory_etc/"
+[ -d /etc/authselect ] && cp -a /etc/authselect "$factory_etc/"
+touch "$factory_etc/environment"
+mkdir -p "$factory_etc/security" && touch "$factory_etc/security/pam_env.conf"
+# console login on the serial headless terminal (spec 10.2): the
+# login stack's pam_securetty gates root console logins on
+# /etc/securetty; the package default covers the virtual consoles,
+# add the serial one.
+grep -qx ttyS0 "$factory_etc/securetty" \
+    || printf 'ttyS0\n' >> "$factory_etc/securetty"
+# --- SSH server factory baseline (spec 18.5): sshd cannot start
+# without /etc/ssh/sshd_config, and the package ships it in /etc
+# (not /usr). Snapshot the package-provided configuration. The host
+# keys are NOT shipped: the package scriptlet generates them at
+# image-build time (build-host specific), and every machine gets its
+# own at first boot (ingot-ssh-hostkeys.service, a no-op when the
+# keys already exist).
+if [ -d /etc/ssh ]; then
+    cp -a /etc/ssh "$factory_etc/"
+    rm -f "$factory_etc"/ssh/ssh_host_*
+fi
+# --- Persistent journal (spec 18.3): the profile's journal lives
+# under /var/log/journal (persistent on the installed machine;
+# ephemeral in the live session, where /var is tmpfs).
+mkdir -p "$factory_etc/systemd"
+cat > "$factory_etc/systemd/journald.conf" <<'CONF'
+[Journal]
+Storage=persistent
+SystemMaxUse=1G
+CONF
+echo "ingot: account + PAM factory baseline and profile service set staged in share/factory/etc" >&2
 # The initramfs root must contain a POSIX shell: dracut's shell-interpreter
 # module resolves /bin/sh to the first of bash dash busybox present in the
 # initramfs. brush is the /bin/sh of the runtime root, not of the initramfs,
@@ -61,6 +137,6 @@ ln -s ../dbus.socket /usr/lib/systemd/system/sockets.target.wants/dbus.socket
 # The staged initrd is named after the built version (tools/build.sh
 # exports INITRD_NAME via the per-build conf.d drop-in).
 mkdir -p "$ARTIFACTDIR/io.mkosi.initrd"
-dracut --force --no-hostonly --add bash --kver "$kv" \
+dracut --force --no-hostonly --add bash --omit crypt --kver "$kv" \
     "$ARTIFACTDIR/io.mkosi.initrd/${INITRD_NAME:-ingot-0.1.0.initrd}"
 echo "ingot: initramfs staged at $ARTIFACTDIR/io.mkosi.initrd/${INITRD_NAME:-ingot-0.1.0.initrd}" >&2

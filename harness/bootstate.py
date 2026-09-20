@@ -17,6 +17,10 @@ Interprets the on-ESP artifacts systemd-boot uses for A/B selection:
 wins (versionsort). An armed-but-untried entry is selected like any
 other - the counter is its protection, not exclusion.
 """
+try:
+    import pefile
+except ImportError:
+    pefile = None
 
 import re
 import struct
@@ -95,6 +99,18 @@ def osrel_version(data: bytes):
     """VERSION_ID from a UKI's .osrel section; None when absent or unparseable."""
     if len(data) < 0x40:
         return None
+    if pefile is not None:
+        try:
+            pe = pefile.PE(data=data, fast_load=True)
+            for s in pe.sections:
+                if s.Name.rstrip(b"\x00") == b".osrel":
+                    text = s.get_data().decode("utf-8", "replace")
+                    for line in text.splitlines():
+                        if line.startswith("VERSION_ID="):
+                            return line.split("=", 1)[1].strip()
+            return None
+        except Exception:
+            pass
     try:
         (e_lfanew,) = struct.unpack_from("<I", data, 0x3C)
         off = e_lfanew

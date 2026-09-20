@@ -1,0 +1,9 @@
+# Ingot factory network default (spec 18.1: systemd-networkd). The
+# primary wired interface (virtio/physical NIC) comes up via DHCP:
+# the headless terminal is reached over the console, and remote
+# workflows (spec 18.5) need a routable address.
+[Match]
+Name=en*
+
+[Network]
+DHCP=yes

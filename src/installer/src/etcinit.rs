@@ -98,7 +98,7 @@ fn seed_factory(var: &Path, slot: &Path, log: &InstallLog) -> Result<(), String>
     log.log_result(
         "etcinit",
         "factory-seeded",
-        Some(format!("/var/lib/etc seeded from /usr/share/factory/etc")),
+        Some("/var/lib/etc seeded from /usr/share/factory/etc".to_string()),
     )
 }
 
@@ -193,9 +193,9 @@ fn accounts(
 ) -> Result<(), String> {
     // --- users ------------------------------------------------------------
     // uids start at 1000 (spec: the first user is the administrator).
-    let mut uid = 1000u32;
-    let mut gid = 1000u32;
-    for u in &cfg.users {
+    for (i, u) in cfg.users.iter().enumerate() {
+        let uid = 1000 + i as u32;
+        let gid = uid;
         if !crate::config::is_user_name(&u.name) {
             return Err(format!("user name {:?} is invalid", u.name));
         }
@@ -258,8 +258,6 @@ fn accounts(
             "user",
             Some(format!("{} uid={uid} shell={shell}", u.name)),
         )?;
-        uid += 1;
-        gid += 1;
     }
 
     // The account files: shadow must not be world-readable (the

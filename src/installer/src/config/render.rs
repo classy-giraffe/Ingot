@@ -20,11 +20,21 @@ pub fn render(cfg: &Config) -> String {
     s.push_str("[target]\n");
     s.push_str(&format!("disk = {}\n\n", quote(&cfg.target_disk)));
     s.push_str("[source]\n");
-    s.push_str(&format!(
-        "base = {}\nversion = {}\n\n",
-        quote(&cfg.source_base),
-        quote(&cfg.version.to_string())
-    ));
+    match cfg.source_mode {
+        super::SourceMode::Artifacts => {
+            s.push_str(&format!(
+                "base = {}\nversion = {}\n\n",
+                quote(&cfg.source_base),
+                quote(&cfg.version.to_string())
+            ));
+        }
+        super::SourceMode::Live => {
+            s.push_str(&format!(
+                "mode = \"live\"\nbase = {}\n\n",
+                quote(&cfg.source_base)
+            ));
+        }
+    }
     s.push_str("[system]\n");
     s.push_str(&format!(
         "hostname = {}\ntimezone = {}\nlocale = {}\nkeymap = {}\n\n",
@@ -74,9 +84,9 @@ pub fn render(cfg: &Config) -> String {
 /// bare byte count. Round-trips through `size::parse_size`.
 fn size_str(s: ByteSize) -> String {
     let b = s.0;
-    if b % GIB == 0 {
+    if b.is_multiple_of(GIB) {
         format!("{}G", b / GIB)
-    } else if b % MIB == 0 {
+    } else if b.is_multiple_of(MIB) {
         format!("{}M", b / MIB)
     } else {
         b.to_string()

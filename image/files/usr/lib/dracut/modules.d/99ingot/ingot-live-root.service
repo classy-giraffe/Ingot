@@ -1,0 +1,18 @@
+[Unit]
+# The live runtime root (spec 10.3: the live UKI carries
+# root=live; the installed system's UKI carries
+# root=PARTUUID+usr=PARTUUID, so this unit is dormant there).
+Description=Ingot live root (tmpfs / with the ISO live erofs at /usr)
+ConditionKernelCommandLine=|root=tmpfs
+ConditionKernelCommandLine=|root=live
+ConditionKernelCommandLine=|ingot.live
+DefaultDependencies=no
+After=initrd-root-fs.target dracut-pre-pivot.service
+Before=initrd-cleanup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/ingot/prepare-live-root.sh
+
+[Install]
+WantedBy=initrd.target
