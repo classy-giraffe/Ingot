@@ -6,11 +6,12 @@ before starting T7+.
 ## Where things stand
 
 **T6 complete.** All acceptance criteria verified by the E2E harness
-(`harness/iso.py`, 12 checks across two scenarios) on real QEMU boots
+(`harness/iso.py`, 14 checks across two scenarios) on real QEMU boots
 with Secure Boot enabled (OVMF snakeoil keys enrolled):
 
 - **Scenario A (Criterion 12, Live ISO boot):**
-  - Boots headless with Secure Boot on to serial console `ingot-live login:`.
+  - Boots headless with Secure Boot on to serial console with automatic
+    root login directly into **Nushell 0.115.1** (`ingot-live login: root`).
   - Ephemeral state model verified: root `/` is tmpfs, `/usr` is read-only
     erofs from the ISO payload (`LiveOS/rootfs.erofs`), `/var` is tmpfs,
     `/etc` is bound over `/var/lib/etc` initialized from factory defaults.
@@ -18,7 +19,10 @@ with Secure Boot enabled (OVMF snakeoil keys enrolled):
     (different across boots), and a scratch marker in `/var/tmp` disappears
     on reboot.
   - Reachable SSH: `sshd` starts automatically, accepts the live test key
-    (`tools/keys/live.key` via `root/.ssh/authorized_keys`), and logs in.
+    (`tools/keys/live.key` via `root/.ssh/authorized_keys`), and opens an
+    interactive Nushell session.
+  - Clean console output: `nowatchdog` eliminates CPU watchdog timeout
+    messages while preserving early-boot Secure Boot verification.
 
 - **Scenario B (Criterion 11, Unattended install):**
   - Auto-trigger: boots ISO with a declarative config disk (`config.raw`
@@ -48,9 +52,9 @@ A/B harness, engine conventions, wizard, admin userland).
 - **Live ISO image builder (`tools/build-iso.sh`):**
   - Output: `dist/ingot_0.1.0.iso` (spec 10.3 layout).
   - Live UKI PE surgery: swaps the `.cmdline` section of `dist/ingot_0.1.0.efi`
-    in-place with `root=tmpfs ingot.live console=tty0 console=ttyS0`, truncates
-    the stale signature, recomputes the Authenticode image hash, clones the
-    dist PKCS#7 (updating `spcIndirectData` hash and `messageDigest`), re-signs
+    in-place with `root=tmpfs ingot.live console=tty0 console=ttyS0 nowatchdog`,
+    truncates the stale signature, recomputes the Authenticode image hash, clones
+    the dist PKCS#7 (updating `spcIndirectData` hash and `messageDigest`), re-signs
     with the snakeoil RSA key, and verifies with `sbverify`.
   - All sections except `.cmdline` remain byte-identical to the installed UKI.
   - Live ESP image: creates a FAT filesystem carrying the signed fallback
@@ -71,9 +75,10 @@ A/B harness, engine conventions, wizard, admin userland).
     fallback device scan), mounts `/sysroot/media/ingot-iso`, mounts
     `LiveOS/rootfs.erofs` at `/sysroot/usr`, materializes factory defaults to
     `/sysroot/var/lib/etc`, binds over `/sysroot/etc`, unlocks the console
-    root password, deploys the live SSH rescue key to `/sysroot/root/.ssh`,
-    generates a per-boot `machine-id`, arms `ingot-live-install.service`, and
-    creates runtime root symlinks.
+    root password, sets root's shell to `/usr/bin/nushell` in `passwd`, installs
+    autologin systemd drop-ins for `getty@tty1` and `serial-getty@ttyS0`, deploys
+    the live SSH rescue key to `/sysroot/root/.ssh`, generates a per-boot
+    `machine-id`, arms `ingot-live-install.service`, and creates runtime root symlinks.
   - `99-ingot.conf`: adds `iso9660` module to initramfs autoloading.
 
 - **Workstation profile package baseline and factory defaults:**
@@ -82,44 +87,49 @@ A/B harness, engine conventions, wizard, admin userland).
   - Factory defaults in `image/mkosi.postinst.chroot`: enables `sshd.service`,
     `systemd-networkd.service`, `getty@tty1.service`, `getty@ttyS0.service`,
     and `ingot-ssh-hostkeys.service`.
+  - Sets root default shell to `/usr/bin/nushell` in `$factory_etc/passwd` and
+    registers `/usr/bin/nu` and `/usr/bin/nushell` in `/etc/shells`.
+  - Masked `systemd-loop@.service` to prevent failure on missing `systemd-dissect`.
   - Runs `authselect select local --force` and preserves `/etc/authselect`,
-    `/etc/security`, and `/etc/pam.d` in `/usr/share/factory/etc` so PAM
-    authentication functions cleanly on first boot and in the live session.
+    `/etc/security`, and `/etc/pam.d` in `/usr/share/factory/etc`.
   - Default DHCP network configuration: `20-ethernet.network`.
   - On-boot host key generation: `ingot-ssh-hostkeys.service`.
 
-- **Installer live source deployment mode (`src/installer/`):**
+- **Installer live source deployment mode & TUI redesign (`src/installer/`):**
   - `source.rs`: `LiveSource` struct and `resolve_live()` to resolve the
     running release's erofs payload and installed ESP tree from `/media/ingot-iso`.
-  - `engine.rs`: `PlanSource::Live` variant, dynamic version resolution from
-    the running `/usr/lib/os-release`, tool availability checks filtered by
-    target format (`qemu-img` only required for qcow2, `partprobe` optional).
+  - `config/render.rs`: added `SourceMode::Live` serialization (emits `mode = "live"`
+    without `version` key), fixing the review screen's `artifact not found` failure.
+  - `target.rs`: auto-probes `/sys/block` to discover available writable and
+    read-only block devices with human-readable sizes (`size_human()`).
+  - `wizard/`: modularized drawing into `ui_draw.rs` (banner, breadcrumb ribbon,
+    rounded cards), `ui_steps.rs` (forms with padded `LABEL_W = 18` preventing
+    label collisions), and `ui_review.rs` (3-card executive summary).
   - `deploy.rs`: `deploy_live()` to deploy the slot erofs to slot A and copy
     the installed ESP tree to the mounted ESP partition.
-  - `target.rs`: fixed partition name resolution for block devices whose names
-    end in letters (`vda1`, `sda1`) as well as digits (`loop0p1`, `nvme0n1p1`).
-  - `sshkey.rs`: improved comment splitting using `split_once(' ')` to handle
-    multi-word comments.
-  - `live-install.sh`: unattended installer driver for the live ISO, scanning
-    block devices for `ingot-install.toml`, executing the installer, and
-    logging markers to the serial console.
+  - `live-install.sh`: unattended installer driver for the live ISO, using `blkid`
+    to skip raw unformatted disks before mounting.
 
-- **Harness and tests (`harness/`):**
-  - `harness/iso.py`: end-to-end verification suite running Scenario A (live
-    ISO boot, SSH, ephemeral reset) and Scenario B (unattended install, layout
-    forensics, installed boot, SSH, hostname, initial user, Secure Boot).
-  - `harness/gpt.py`: generalized GPT reader to support variable partition
-    entry counts from headers (libfdisk 128 entries vs xorriso 248 entries).
-  - `justfile`: added `just iso` recipe.
-  - `harness/pins.json`: pinned `tools/keys/live.key` sha256.
+- **Testing infrastructure & tooling:**
+  - Integrated `uv` virtualenv at `.venv` with `qemu.qmp`, `virt-firmware`,
+    `pefile`, `pytest`, `pytest-xdist`, and `ruff`.
+  - `harness/run.py`: added QMP socket support with `qmp_powerdown()` and HMP fallback.
+  - `harness/esp.py`: added `read_nvram_vars()` using `virt.firmware` to parse
+    EDK2 NVRAM variable stores (`.fd`).
+  - `harness/bootstate.py`: used `pefile` for structured `.osrel` extraction with
+    manual struct fallback.
+  - `justfile`: `just test` uses `pytest` when available, added `just lint` and
+    `just fmt` via `ruff`.
 
 ## Verification results
 
-```
+```text
 iso: scenario A (live ISO, criterion 12) on ingot_0.1.0.iso
   PASS  live_ssh  (ssh root@live -> hostname 'ingot-live' (rc 0))
+  PASS  live_secure_boot  (Secure boot enabled (console))
+  PASS  live_getty  (Headless serial terminal reached (console))
   PASS  live_root  (/ tmpfs, /usr erofs)
-  PASS  live_ephemeral  (machine-id 64a9d881.. -> 4d081ed6..; marker gone)
+  PASS  live_ephemeral  (machine-id 05d1ed3f.. -> 39e07ed0..; marker gone)
 iso: scenario B (unattended install, criterion 11)
   PASS  install_auto_trigger  (config disk found; unattended install started)
   PASS  install_complete  (installer exit 0 (marker on the serial console))
@@ -133,8 +143,9 @@ iso: scenario B (unattended install, criterion 11)
 results: /home/tommy/Ingot/dist/harness/iso/results.json
 ```
 
-- Full harness unit test suite (`just test`): 54/54 passed (24.1s).
-- Full Rust workspace test suite (`just rust-test`): 101/101 passed.
+- **Full harness test suite (`just test`):** 56/56 passed (23.5s).
+- **Full Rust workspace test suite (`just rust-test`):** 103/103 passed (4 suites).
+- **End-to-end install proof:** live ISO boots to Nushell in 13.2s, dry-run plan verified, install executes to `/dev/vda` with all 22 events logged (`install-complete`), and target boots independently with Secure Boot on into `ingot-workstation` in 8.0s.
 
 ## Follow-up tickets
 
